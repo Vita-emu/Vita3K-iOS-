@@ -4,6 +4,7 @@
 #include <vita3k_ios/NativeFrontend.h>
 #include <vita3k_ios/VirtualController.h>
 #include <util/log.h>
+#include <util/ios_runtime_tuning.h>
 
 // Same MacTypes collision the frontend hits: Apple's MacTypes.h declares
 // `typedef char *Ptr;`, which clashes with the emulator's global Ptr<T>
@@ -303,6 +304,11 @@ id bridge_games() {
 @end
 
 @implementation TsubomiBridge
+
++ (BOOL)cpuRequiresJIT {
+    return ios_runtime::uses_jit();
+}
+
 
 + (TsubomiSettings *)currentSettings {
     return [[TsubomiSettings alloc]

@@ -1,0 +1,36 @@
+cmake_minimum_required(VERSION 3.22)
+project(ir_interpreter_tests LANGUAGES C CXX ASM)
+set(CMAKE_CXX_STANDARD 20)
+set(DYNARMIC_TESTS OFF CACHE BOOL "" FORCE)
+set(DYNARMIC_FRONTENDS A32 CACHE STRING "" FORCE)
+set(DYNARMIC_USE_BUNDLED_EXTERNALS ON CACHE BOOL "" FORCE)
+set(DYNARMIC_WARNINGS_AS_ERRORS OFF CACHE BOOL "" FORCE)
+get_filename_component(REPO "${CMAKE_CURRENT_LIST_DIR}/../../.." ABSOLUTE)
+add_subdirectory("${REPO}/external/dynarmic" dynarmic)
+add_executable(ir_interpreter_tests main.cpp "${REPO}/vita3k/cpu/src/ir_interpreter.cpp")
+target_include_directories(ir_interpreter_tests PRIVATE "${REPO}/vita3k/cpu/include")
+target_link_libraries(ir_interpreter_tests PRIVATE dynarmic fmt::fmt merry::mcl)
+target_compile_options(ir_interpreter_tests PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+enable_testing()
+add_test(NAME ir_interpreter COMMAND ir_interpreter_tests)
+add_executable(ir_adapter_tests adapter.cpp
+    "${REPO}/vita3k/cpu/src/ir_interpreter.cpp"
+    "${REPO}/vita3k/cpu/src/ir_interpreter_cpu.cpp"
+    "${REPO}/vita3k/mem/src/allocator.cpp")
+target_include_directories(ir_adapter_tests PRIVATE stubs
+    "${REPO}/vita3k/cpu/include" "${REPO}/vita3k/mem/include" "${REPO}/vita3k/util/include")
+target_link_libraries(ir_adapter_tests PRIVATE dynarmic fmt::fmt merry::mcl)
+target_compile_options(ir_adapter_tests PRIVATE -UNDEBUG)
+add_test(NAME ir_adapter COMMAND ir_adapter_tests)
+add_library(cpu_factory_compile OBJECT "${REPO}/vita3k/cpu/src/cpu.cpp")
+target_compile_definitions(cpu_factory_compile PRIVATE VITA3K_PLATFORM_IOS)
+target_include_directories(cpu_factory_compile PRIVATE stubs
+    "${REPO}/vita3k/cpu/include" "${REPO}/vita3k/mem/include" "${REPO}/vita3k/util/include")
+target_link_libraries(cpu_factory_compile PRIVATE dynarmic fmt::fmt merry::mcl)
+add_executable(ir_differential_tests differential.cpp "${REPO}/vita3k/cpu/src/ir_interpreter.cpp")
+target_include_directories(ir_differential_tests PRIVATE
+    "${REPO}/vita3k/cpu/include" "${REPO}/external/dynarmic/tests/A32")
+target_link_libraries(ir_differential_tests PRIVATE dynarmic fmt::fmt merry::mcl)
+target_compile_options(ir_differential_tests PRIVATE -UNDEBUG)
+add_test(NAME ir_differential COMMAND ir_differential_tests)
+set_tests_properties(ir_interpreter ir_adapter ir_differential PROPERTIES TIMEOUT 30)

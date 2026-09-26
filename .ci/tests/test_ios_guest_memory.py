@@ -18,6 +18,13 @@ class GuestMemoryTests(unittest.TestCase):
         fixture = (Path(__file__).parent / "ios_guest_memory.cpp").read_text()
         start = memory.index("static Address alloc_inner(MemState &state", memory.index("bool prereserve_guest_memory()"))
         fixture = fixture.replace("// INSERT_ALLOCATE", memory[start:memory.index("\nAddress alloc_aligned", start)])
+        start = memory.index("Address alloc_aligned(")
+        wrappers = memory[start:memory.index("\nstatic void align_to_page", start)]
+        start = memory.index("Address alloc(MemState &state")
+        wrappers += memory[start:memory.index("\nAddress alloc_at", start)]
+        start = memory.index("Address try_alloc_at(")
+        wrappers += memory[start:memory.index("\nBlock alloc_block", start)]
+        fixture = fixture.replace("// INSERT_ALLOC_WRAPPERS", wrappers)
         start = memory.index("static void decommit_guest_pages(")
         fixture = fixture.replace("// INSERT_FREE", memory[start:memory.index("\nuint32_t mem_available", start)])
         with tempfile.TemporaryDirectory() as directory:

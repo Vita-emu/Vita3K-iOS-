@@ -324,3 +324,14 @@ The setting reduces eager compilation, not a game's eventual live working set.
 Neither a 4 MiB cache nor these cleanup changes guarantees staying below the
 OS memory limit. Device gameplay, JIT permissions and sustained RAM/FPS still
 need verification on iPhone; no measured MB savings are claimed here.
+
+## CPU backend and guest allocation budget
+
+Settings now groups CPU, memory, graphics/display, audio, interface, library,
+controls, overlay and system options into separate pages. The default guest
+allocation budget is 768 MiB; this excludes JIT/GPU/UI and is not a process
+RAM cap. An experimental scalar IR Interpreter can be selected for the next
+process alongside the default Dynarmic JIT. Unsupported instructions stop
+with an explicit error; general game support still requires JIT. See
+[the runtime settings guide](runtime-settings.md) for exact scope, application
+timing, supported instructions and outstanding device checks.

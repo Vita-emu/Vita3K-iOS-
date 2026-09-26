@@ -464,7 +464,7 @@ struct LibraryView: View {
 
     private func launch(_ game: GameEntry) {
         guard Bridge.firmwareReadyOrPresentAlert() else { return }
-        guard library.jitAvailable else {
+        guard !Bridge.cpuRequiresJIT || library.jitAvailable else {
             // Guest execution needs JIT; refuse the boot and explain, rather
             // than letting the launch path hit the missing-debugger crash.
             Bridge.presentJITRequiredAlert()
@@ -541,7 +541,7 @@ private struct LibraryJITBanner: View {
 
     var body: some View {
         Group {
-            if !library.jitAvailable {
+            if Bridge.cpuRequiresJIT && !library.jitAvailable {
                 Button {
                     Bridge.presentJITRequiredAlert()
                 } label: {

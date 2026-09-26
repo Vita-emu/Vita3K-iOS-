@@ -19,13 +19,31 @@
 #include <cpu/functions.h>
 #include <cpu/impl/dynarmic_cpu.h>
 #include <cpu/impl/interface.h>
+#include <cpu/impl/ir_interpreter_cpu.h>
 #include <cpu/state.h>
 #include <mem/ptr.h>
+#include <util/ios_runtime_tuning.h>
 #include <util/log.h>
 #include <util/types.h>
 
 #include <memory>
+#include <mutex>
 #include <string>
+#include <utility>
+
+namespace {
+std::mutex backend_error_mutex;
+std::string backend_error;
+} // namespace
+std::string take_cpu_backend_error() {
+    std::lock_guard<std::mutex> lock(backend_error_mutex);
+    return std::exchange(backend_error, {});
+}
+void report_cpu_backend_error(std::string error) {
+    std::lock_guard<std::mutex> lock(backend_error_mutex);
+    if (backend_error.empty())
+        backend_error = std::move(error);
+}
 
 static void delete_cpu_state(CPUState *state) {
     delete state;
@@ -49,7 +67,12 @@ CPUStatePtr init_cpu(bool cpu_opt, SceUID thread_id, std::size_t processor_id, M
     }
 
     try {
-        state->cpu = std::make_unique<DynarmicCPU>(state.get(), processor_id, cpu_opt);
+#ifdef VITA3K_PLATFORM_IOS
+        if (!ios_runtime::uses_jit())
+            state->cpu = std::make_unique<IRInterpreterCPU>(state.get(), processor_id);
+        else
+#endif
+            state->cpu = std::make_unique<DynarmicCPU>(state.get(), processor_id, cpu_opt);
     } catch (const std::exception &e) {
         // On iOS the JIT code region can legitimately be unavailable (pool
         // exhausted after the debugger detached). Fail the thread creation

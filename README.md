@@ -26,8 +26,11 @@ that you are complying with the laws in your jurisdiction.
   sign and sideload an unsigned `.ipa`. The compatibility target includes
   **iPhone 8 Plus on iOS 16.7.16**; game performance and device stability still
   need physical-device validation. See [iOS 16 compatibility](docs/ios-16-compatibility.md).
-- **JIT** must be enabled for games to run (Tsubomi shows a banner and refuses to boot
-  games when JIT is unavailable). [StikDebug](https://github.com/StephenDev0/StikDebug)
+- **JIT** must be enabled for the default Dynarmic game backend (Tsubomi shows a
+  banner and refuses JIT launches when permission is unavailable). Settings also
+  offers an **experimental IR Interpreter** without JIT permission; its limited
+  instruction support is not sufficient for general games. See
+  [runtime settings and the 768 MiB guest budget](docs/runtime-settings.md). [StikDebug](https://github.com/StephenDev0/StikDebug)
   or another debugger/JIT enabler compatible with your iOS version is required.
   Do not assume an iOS 26 JIT tool supports iOS 16.
 - Your own **PS Vita firmware** and **game dumps**.

@@ -5,7 +5,12 @@
 namespace ios_runtime {
 // Loaded once by the iOS frontend before renderer/JIT initialization. Settings
 // edits affect the next process: existing JIT pool regions must keep their size.
+enum class CPUBackend { Jit = 0,
+    IRInterpreter = 1 };
+
 struct Tuning {
+    CPUBackend cpu_backend = CPUBackend::Jit;
+    int guest_memory_mib = 768;
     int jit_cache_mib = 0;
     int shader_workers = 0;
     int texture_entries = 0;
@@ -14,6 +19,13 @@ struct Tuning {
 };
 inline Tuning tuning;
 
+constexpr CPUBackend cpu_backend(int requested) {
+    return requested == 1 ? CPUBackend::IRInterpreter : CPUBackend::Jit;
+}
+inline bool uses_jit() { return tuning.cpu_backend == CPUBackend::Jit; }
+constexpr int guest_memory_mib(int requested) {
+    return requested == 512 || requested == 768 || requested == 1024 ? requested : 768;
+}
 constexpr int jit_cache_mib(int requested) {
     return requested == 4 || requested == 8 || requested == 12 || requested == 16 || requested == 24 || requested == 32 ? requested : 0;
 }

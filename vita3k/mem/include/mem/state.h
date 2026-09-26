@@ -67,6 +67,9 @@ struct MemState {
     std::mutex generation_mutex;
     std::mutex protect_mutex;
 
+    // Guest allocation budget, protected by generation_mutex. Not process RSS.
+    uint64_t guest_bytes_used = 0;
+    uint64_t guest_bytes_limit = 0; // Zero means unlimited on desktop.
     uint32_t host_page_size = 0;
     Memory memory;
     AllocPageTable alloc_table;

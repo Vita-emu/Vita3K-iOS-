@@ -1,36 +1,62 @@
-#include <util/ios_runtime_tuning.h>
 #include <cassert>
-#include <cstdint>
 #include <chrono>
+#include <cstdint>
 #include <future>
-#include <thread>
-#include <memory>
 #include <limits>
+#include <memory>
 #include <set>
+#include <thread>
+#include <util/ios_runtime_tuning.h>
 #include <vector>
 
 static int freed_contexts = 0, premature_frees = 0;
-static void sws_freeContext(int *context) { if (context) { ++freed_contexts; delete context; } }
+static void sws_freeContext(int *context) {
+    if (context) {
+        ++freed_contexts;
+        delete context;
+    }
+}
 namespace vkutil {
 struct Image {
     void *image = nullptr;
     void *view = nullptr;
-    ~Image() { if (image) ++premature_frees; }
+    ~Image() {
+        if (image)
+            ++premature_frees;
+    }
 };
 struct Buffer {
     void *buffer = nullptr;
     uint64_t size = 0;
-    ~Buffer() { if (buffer) ++premature_frees; }
+    ~Buffer() {
+        if (buffer)
+            ++premature_frees;
+    }
 };
 struct DestroyQueue {
     std::set<void *> handles;
-    void add(void *handle) { if (handle) assert(handles.insert(handle).second); }
-    void add_image(Image &image) { add(image.image); add(image.view); image.image = image.view = nullptr; }
-    void add_buffer(Buffer &buffer) { add(buffer.buffer); buffer.buffer = nullptr; }
+    void add(void *handle) {
+        if (handle)
+            assert(handles.insert(handle).second);
+    }
+    void add_image(Image &image) {
+        add(image.image);
+        add(image.view);
+        image.image = image.view = nullptr;
+    }
+    void add_buffer(Buffer &buffer) {
+        add(buffer.buffer);
+        buffer.buffer = nullptr;
+    }
 };
-}
-struct Casted { vkutil::Buffer transition_buffer; vkutil::Image texture; };
-struct View { void *view; };
+} // namespace vkutil
+struct Casted {
+    vkutil::Buffer transition_buffer;
+    vkutil::Image texture;
+};
+struct View {
+    void *view;
+};
 struct ColorSurfaceCacheInfo {
     std::vector<Casted> casted_textures;
     std::vector<View> sampled_views;
@@ -44,32 +70,49 @@ struct ColorSurfaceCacheInfo {
     bool format = false;
 };
 static int sync_waits = 0;
-struct DepthSurfaceView { vkutil::Image stencil_view, depth_view; };
+struct DepthSurfaceView {
+    vkutil::Image stencil_view, depth_view;
+};
 struct DepthStencilSurfaceCacheInfo {
     std::vector<DepthSurfaceView> read_surfaces;
     void *depth_view = nullptr, *stencil_view = nullptr;
     vkutil::Image texture;
 };
-struct Frame { vkutil::DestroyQueue destroy_queue; };
-struct SurfaceReadbackBarrierRequest { std::shared_ptr<std::promise<void>> completed; };
+struct Frame {
+    vkutil::DestroyQueue destroy_queue;
+};
+struct SurfaceReadbackBarrierRequest {
+    std::shared_ptr<std::promise<void>> completed;
+};
 struct RequestQueue {
     bool aborted = false;
     std::thread worker;
-    ~RequestQueue() { if (worker.joinable()) worker.join(); }
+    ~RequestQueue() {
+        if (worker.joinable())
+            worker.join();
+    }
     bool is_aborted() const { return aborted; }
     void push(SurfaceReadbackBarrierRequest request) {
         ++sync_waits;
-        if (worker.joinable()) worker.join();
+        if (worker.joinable())
+            worker.join();
         worker = std::thread([request] { request.completed->set_value(); });
     }
 };
-struct State { Frame f; RequestQueue request_queue; Frame &frame() { return f; } };
+struct State {
+    Frame f;
+    RequestQueue request_queue;
+    Frame &frame() { return f; }
+};
 using VKState = State;
 // INSERT_READBACK_BARRIER
 struct VKSurfaceCache {
     State state;
     std::set<void *> retired_framebuffer_views;
-    void destroy_framebuffers(void *view) { if (view) retired_framebuffer_views.insert(view); }
+    void destroy_framebuffers(void *view) {
+        if (view)
+            retired_framebuffer_views.insert(view);
+    }
     void destroy_surface(ColorSurfaceCacheInfo &info);
     void destroy_surface(DepthStencilSurfaceCacheInfo &info);
 };
@@ -82,10 +125,15 @@ static uint64_t staging_size(ColorSurfaceCacheInfo *last_written_surface) {
     return copy_buffer.size;
 }
 static bool staging_needs_wait(uint64_t previous_frame, uint64_t frame, bool use_previous_buffer = false) {
-    struct Staging { uint64_t frame_timestamp; uint64_t scene_timestamp = 1; };
-    Staging staging{previous_frame};
+    struct Staging {
+        uint64_t frame_timestamp;
+        uint64_t scene_timestamp = 1;
+    };
+    Staging staging{ previous_frame };
     const auto *staging_buffer = &staging;
-    struct Context { uint64_t frame_timestamp; } current{frame};
+    struct Context {
+        uint64_t frame_timestamp;
+    } current{ frame };
     const auto *context = &current;
     constexpr uint64_t last_waited_scene = 0;
     constexpr int MAX_FRAMES_RENDERING = 3;
@@ -94,9 +142,19 @@ static bool staging_needs_wait(uint64_t previous_frame, uint64_t frame, bool use
 }
 static void *handle(int value) { return reinterpret_cast<void *>(static_cast<uintptr_t>(value)); }
 int main() {
+    assert(ios_runtime::tuning.guest_memory_mib == 768);
+    assert(ios_runtime::guest_memory_mib(0) == 768);
+    assert(ios_runtime::guest_memory_mib(512) == 512);
+    assert(ios_runtime::guest_memory_mib(1024) == 1024);
+    assert(ios_runtime::guest_memory_mib(-1) == 768);
+    assert(ios_runtime::cpu_backend(0) == ios_runtime::CPUBackend::Jit);
+    assert(ios_runtime::cpu_backend(1) == ios_runtime::CPUBackend::IRInterpreter);
+    assert(ios_runtime::cpu_backend(99) == ios_runtime::CPUBackend::Jit);
     using namespace ios_runtime;
-    for (int invalid : {-100, -1, 1, 3, 5, 7, 9, 11, 13, 33, 4096}) assert(jit_cache_mib(invalid) == 0);
-    for (int valid : {4, 8, 12, 16, 24, 32}) assert(jit_cache_mib(valid) == valid);
+    for (int invalid : { -100, -1, 1, 3, 5, 7, 9, 11, 13, 33, 4096 })
+        assert(jit_cache_mib(invalid) == 0);
+    for (int valid : { 4, 8, 12, 16, 24, 32 })
+        assert(jit_cache_mib(valid) == valid);
     assert(shader_workers(0, 4) == 0);
     assert(shader_workers(4, 2) == 2);
     assert(shader_workers(2, 0) == 1);
@@ -106,7 +164,8 @@ int main() {
     assert(texture_entries(0, 3073) == 512);
     assert(texture_entries(0, 0) == 512);
     assert(texture_entries(-100, 3072) == 128);
-    for (int valid : {128, 256, 512}) assert(texture_entries(valid, 3072) == valid);
+    for (int valid : { 128, 256, 512 })
+        assert(texture_entries(valid, 3072) == valid);
     constexpr uint64_t mib = 1024 * 1024;
     assert(shrink_staging(16 * mib, 4 * mib, 240, 120));
     assert(!shrink_staging(16 * mib, 4 * mib + 1, 240, 120));
@@ -121,16 +180,19 @@ int main() {
     assert(!staging_needs_wait(~uint64_t(0), 0));
     VKSurfaceCache cache;
     ColorSurfaceCacheInfo info;
-    info.texture.image = handle(1); info.texture.view = handle(2);
+    info.texture.image = handle(1);
+    info.texture.view = handle(2);
     info.alternate_view = handle(3);
     info.blit_image = std::make_unique<vkutil::Image>();
-    info.blit_image->image = handle(4); info.blit_image->view = handle(5);
-    info.copy_buffer = std::make_unique<vkutil::Buffer>(); info.copy_buffer->buffer = handle(6);
+    info.blit_image->image = handle(4);
+    info.blit_image->view = handle(5);
+    info.copy_buffer = std::make_unique<vkutil::Buffer>();
+    info.copy_buffer->buffer = handle(6);
     info.sws_context = new int(1);
-    info.sampled_views.push_back({handle(7)});
+    info.sampled_views.push_back({ handle(7) });
     cache.destroy_surface(info);
     assert(cache.state.f.destroy_queue.handles.size() == 7);
-    assert(cache.retired_framebuffer_views == std::set<void *>({handle(2), handle(3)}));
+    assert(cache.retired_framebuffer_views == std::set<void *>({ handle(2), handle(3) }));
     assert(!info.alternate_view && !info.blit_image && !info.copy_buffer && !info.sws_context);
     assert(!info.need_post_surface_sync && !info.need_buffer_sync);
     assert(freed_contexts == 1 && premature_frees == 0 && sync_waits == 1);
@@ -138,12 +200,15 @@ int main() {
     // allocation sized for the old owner of this LRU slot.
     cache.destroy_surface(info);
     assert(freed_contexts == 1 && cache.state.f.destroy_queue.handles.size() == 7);
-    info.texture.image = handle(8); info.texture.view = handle(9);
+    info.texture.image = handle(8);
+    info.texture.view = handle(9);
     cache.destroy_surface(info);
     assert(cache.state.f.destroy_queue.handles.size() == 9);
     DepthStencilSurfaceCacheInfo depth;
-    depth.texture.image = handle(10); depth.texture.view = handle(11);
-    depth.depth_view = handle(12); depth.stencil_view = handle(13);
+    depth.texture.image = handle(10);
+    depth.texture.view = handle(11);
+    depth.depth_view = handle(12);
+    depth.stencil_view = handle(13);
     cache.destroy_surface(depth);
     cache.destroy_surface(depth);
     assert(!depth.depth_view && !depth.stencil_view);
@@ -151,8 +216,11 @@ int main() {
     cache.state.request_queue.aborted = true;
     wait_for_surface_readbacks(cache.state);
     assert(sync_waits == 1);
-    info.stride_bytes = 960 * 3; info.original_height = 544; info.format = true;
+    info.stride_bytes = 960 * 3;
+    info.original_height = 544;
+    info.format = true;
     assert(staging_size(&info) == 960ULL * 4 * 544);
-    info.stride_bytes = 960 * 4; info.format = false;
+    info.stride_bytes = 960 * 4;
+    info.format = false;
     assert(staging_size(&info) == 960ULL * 4 * 544);
 }

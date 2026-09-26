@@ -1937,6 +1937,8 @@ void vita3k_ios_autorelease(const std::function<void()> &body) {
 void vita3k_ios_load_runtime_preferences() {
     @autoreleasepool {
         NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+        ios_runtime::tuning.cpu_backend = ios_runtime::cpu_backend(static_cast<int>([defaults integerForKey:@"tsubomi.cpuBackend"]));
+        ios_runtime::tuning.guest_memory_mib = ios_runtime::guest_memory_mib(static_cast<int>([defaults integerForKey:@"tsubomi.guestMemoryMiB"]));
         ios_runtime::tuning.jit_cache_mib = static_cast<int>([defaults integerForKey:@"tsubomi.jitCacheMiB"]);
         ios_runtime::tuning.shader_workers = static_cast<int>([defaults integerForKey:@"tsubomi.shaderWorkers"]);
         ios_runtime::tuning.precompile_shaders = [defaults boolForKey:@"tsubomi.precompileShaders"];

@@ -22,8 +22,10 @@
 #include <vkutil/vkutil.h>
 
 #include <array>
+#include <condition_variable>
 #include <limits>
 #include <map>
+#include <mutex>
 #include <set>
 #include <thread>
 #include <vector>
@@ -85,12 +87,14 @@ private:
     // render passes used along shader interlock
     std::map<vk::Format, vk::RenderPass> shader_interlock_pass;
 
-    // only used when accessing the shaders map
+    // Protects the shader map, module publication and shader hash list.
     std::mutex shaders_mutex;
+    std::condition_variable shaders_ready;
     // because of multithreading, we want the pointers to remain stable
     unordered_map_stable<Sha256Hash, vk::ShaderModule> shaders;
     unordered_map_stable<uint64_t, vk::Pipeline> pipelines;
 
+    vk::ShaderModule load_shader_from_disk(const Sha256Hash &hash);
     vk::PipelineShaderStageCreateInfo retrieve_shader(const SceGxmProgram *program, const Sha256Hash &hash, bool is_vertex, bool maskupdate, MemState &mem, const shader::Hints &hints, bool is_srgb = false);
     vk::PipelineVertexInputStateCreateInfo get_vertex_input_state(const SceGxmVertexProgram &vertex_program, MemState &mem);
 
@@ -132,7 +136,7 @@ public:
     vk::RenderPass retrieve_render_pass(vk::Format format, bool force_load, bool force_store, bool is_color_transient, bool no_color = false);
     vk::Pipeline retrieve_pipeline(VKContext &context, SceGxmPrimitiveType &type, bool consider_for_async, MemState &mem);
 
-    vk::ShaderModule precompile_shader(const Sha256Hash &hash, bool search_first = true);
+    vk::ShaderModule precompile_shader(const Sha256Hash &hash);
 
     void set_async_compilation(bool enable);
 };

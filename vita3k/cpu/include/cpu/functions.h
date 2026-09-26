@@ -26,6 +26,10 @@
 
 struct MemState;
 
+// First interpreter failure for the frontend; consumed on its own thread.
+std::string take_cpu_backend_error();
+void report_cpu_backend_error(std::string error);
+
 CPUStatePtr init_cpu(bool cpu_opt, SceUID thread_id, std::size_t processor_id, MemState &mem);
 int run(CPUState &state);
 int step(CPUState &state);

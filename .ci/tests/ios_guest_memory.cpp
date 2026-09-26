@@ -25,6 +25,7 @@ struct AllocMemPage {
 };
 struct MemState {
     std::mutex generation_mutex;
+    uint64_t guest_bytes_used = 0, guest_bytes_limit = 0;
     uint32_t host_page_size;
     std::unique_ptr<uint8_t[]> memory = std::make_unique<uint8_t[]>(arena_size);
     std::vector<AllocMemPage> alloc_table = std::vector<AllocMemPage>(arena_size / STANDARD_PAGE_SIZE);
@@ -39,7 +40,10 @@ struct Range {
     int protection;
 };
 static std::vector<Range> protections, released;
+static bool fail_commit = false;
 static int mprotect(void *address, uint32_t size, int protection) {
+    if (fail_commit && protection == (PROT_READ | PROT_WRITE))
+        return -1;
     protections.push_back({ static_cast<uint8_t *>(address), size, protection });
     return 0;
 }
@@ -56,7 +60,9 @@ static int madvise(void *address, uint32_t size, int advice) {
     std::memset(address, 0xDD, size);
     return 0;
 }
+Address alloc(MemState &, uint32_t, const char *, Address);
 // INSERT_ALLOCATE
+// INSERT_ALLOC_WRAPPERS
 // INSERT_FREE
 static Address allocate(MemState &state, uint32_t start, uint32_t count) {
     const auto address = alloc_inner(state, start, count, "test", true);
@@ -73,6 +79,44 @@ static void assert_released(MemState &state, uint32_t start, uint32_t size) {
     released.clear();
 }
 int main() {
+    // A small budget exercises the same byte accounting as the 768 MiB limit
+    // without physically allocating hundreds of MiB in the test process.
+    {
+        MemState bounded;
+        bounded.host_page_size = KiB(16);
+        bounded.allocator.allocate_at(0, 1); // init() reserves the null page.
+        bounded.guest_bytes_limit = 3 * STANDARD_PAGE_SIZE;
+        const auto a = alloc(bounded, 1, "budget", STANDARD_PAGE_SIZE);
+        const auto b = alloc(bounded, STANDARD_PAGE_SIZE + 1, "budget", STANDARD_PAGE_SIZE);
+        assert(a && b && bounded.guest_bytes_used == bounded.guest_bytes_limit);
+        assert(alloc(bounded, 1, "full", STANDARD_PAGE_SIZE) == 0);
+        assert(try_alloc_at(bounded, 8 * STANDARD_PAGE_SIZE, 1, "fixed full") == 0);
+        assert(alloc_aligned(bounded, 1, "aligned full", STANDARD_PAGE_SIZE, STANDARD_PAGE_SIZE) == 0);
+        free(bounded, a);
+        assert(bounded.guest_bytes_used == 2 * STANDARD_PAGE_SIZE);
+        assert(alloc(bounded, 1, "reuse", STANDARD_PAGE_SIZE) == a);
+        free(bounded, a);
+        free(bounded, b);
+        assert(bounded.guest_bytes_used == 0);
+        fail_commit = true;
+        assert(try_alloc_at(bounded, 4 * STANDARD_PAGE_SIZE, 1, "host failure") == 0);
+        assert(bounded.guest_bytes_used == 0);
+        fail_commit = false;
+        const auto fixed = try_alloc_at(bounded, 4 * STANDARD_PAGE_SIZE, 1, "rollback reused");
+        assert(fixed);
+        free(bounded, fixed);
+        const auto aligned = alloc_aligned(bounded, 1, "aligned", 2 * STANDARD_PAGE_SIZE, STANDARD_PAGE_SIZE);
+        assert(aligned == 2 * STANDARD_PAGE_SIZE);
+        assert(bounded.guest_bytes_used == 2 * STANDARD_PAGE_SIZE);
+        free(bounded, aligned);
+        assert(bounded.guest_bytes_used == 0);
+        assert(alloc(bounded, UINT32_MAX, "overflow", STANDARD_PAGE_SIZE) == 0);
+        assert(alloc_aligned(bounded, UINT32_MAX, "overflow", STANDARD_PAGE_SIZE, STANDARD_PAGE_SIZE) == 0);
+        assert(try_alloc_at(bounded, STANDARD_PAGE_SIZE + 1, UINT32_MAX, "overflow") == 0);
+        assert(alloc(bounded, 0, "zero", STANDARD_PAGE_SIZE) == 0);
+        protections.clear();
+        released.clear();
+    }
     MemState state;
     state.host_page_size = KiB(16);
     // Two guest allocations share one host page. Neither live contents nor

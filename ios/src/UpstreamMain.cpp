@@ -2441,13 +2441,14 @@ std::optional<AppLaunchRequest> choose_boot_title(EmuEnvState &emuenv) {
                     // Defense in depth: the library already refuses launches without
                     // JIT, but re-probe here so a debugger attached after the probe
                     // is honored and one attached-then-detached is caught.
-                    if (!ios_jit_available()) {
+                    if (ios_runtime::uses_jit() && !ios_jit_available()) {
                         LOG_WARN("Refusing launch of '{}': JIT is not available for this process.",
                             action->app_path);
                         vita3k_ios_set_jit_available(false);
                         break;
                     }
-                    vita3k_ios_set_jit_available(true);
+                    if (ios_runtime::uses_jit())
+                        vita3k_ios_set_jit_available(true);
                     g_current_trophy_id.clear();
                     g_current_title.clear();
                     g_current_title_id.clear();
@@ -2603,7 +2604,7 @@ std::optional<AppLaunchRequest> choose_boot_title(EmuEnvState &emuenv) {
                 const Uint64 now_ms = SDL_GetTicks();
                 if (now_ms - last_jit_probe_ms >= 1000) {
                     last_jit_probe_ms = now_ms;
-                    vita3k_ios_set_jit_available(ios_jit_available());
+                    vita3k_ios_set_jit_available(ios_runtime::uses_jit() && ios_jit_available());
                 }
             }
 
@@ -2795,6 +2796,8 @@ public:
 constexpr std::size_t IOS_JIT_POOL_TARGET = 32;
 
 bool prepare_ios_jit_pool() {
+    if (!ios_runtime::uses_jit())
+        return true;
     if (g_jit_pool_ready.load(std::memory_order_relaxed))
         return true;
 #if !defined(__aarch64__)
@@ -2901,7 +2904,7 @@ int main(int argc, char *argv[]) {
     }
     vita3k_ios_apply_orientation_lock();
 
-    const bool initial_jit_available = ios_jit_available();
+    const bool initial_jit_available = ios_runtime::uses_jit() && ios_jit_available();
     vita3k_ios_set_jit_available(initial_jit_available);
     LOG_INFO("iOS JIT availability probe: {}",
         initial_jit_available ? "available for this iOS version"
@@ -2941,6 +2944,7 @@ int main(int argc, char *argv[]) {
         }
     };
 
+    take_cpu_backend_error(); // Drop any failure retained from the previous session.
     app::AppSessionController session_controller(*emuenv);
     SDL_Log("Vita3K iOS: begin_launch '%s'", launch_request->app_path.c_str());
     if (!session_controller.begin_launch(*launch_request)) {
@@ -2993,7 +2997,7 @@ int main(int argc, char *argv[]) {
             }
         }
     } catch (const std::exception &error) {
-        if (!jit_pool_prewarmed
+        if (ios_runtime::uses_jit() && !jit_pool_prewarmed
             && (g_unhandled_universal_jit_breakpoint.exchange(false, std::memory_order_relaxed)
                 || !ios_debugger_attached())) {
             boot_error = "StikDebug detached while Tsubomi was preparing JIT. Re-enable JIT, keep "
@@ -3006,6 +3010,8 @@ int main(int argc, char *argv[]) {
         boot_error = "The game crashed during startup.";
     }
 
+    if (const auto cpu_error = take_cpu_backend_error(); !cpu_error.empty())
+        boot_error = cpu_error;
     if (!boot_error.empty()) {
         LOG_ERROR("iOS boot failed: {}", boot_error);
         session_controller.stop(app::AppSessionStopReason::UserRequest);
@@ -3229,6 +3235,10 @@ int main(int argc, char *argv[]) {
                 running = false;
             }
 
+            if (const auto cpu_error = take_cpu_backend_error(); !cpu_error.empty()) {
+                boot_error = cpu_error;
+                running = false;
+            }
             if (!session_controller.is_running())
                 running = false;
 
@@ -3260,6 +3270,10 @@ int main(int argc, char *argv[]) {
     emuenv->audio.audio_backend.clear();
     restore_global_config();
 
+    if (boot_error.empty())
+        boot_error = take_cpu_backend_error();
+    if (!boot_error.empty())
+        vita3k_ios_show_boot_error(boot_error);
     LOG_INFO("Returning to game library");
     } // while (!app_terminating)
 

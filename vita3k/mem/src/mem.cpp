@@ -19,6 +19,7 @@
 #include <mem/state.h>
 
 #include <util/align.h>
+#include <util/ios_runtime_tuning.h>
 #include <util/log.h>
 
 #include <algorithm>
@@ -86,6 +87,11 @@ bool prereserve_guest_memory() {
 }
 
 bool init(MemState &state, const bool use_page_table) {
+    state.guest_bytes_used = 0;
+#ifdef VITA3K_PLATFORM_IOS
+    state.guest_bytes_limit = static_cast<uint64_t>(ios_runtime::guest_memory_mib(ios_runtime::tuning.guest_memory_mib)) * 1024 * 1024;
+    LOG_INFO("Guest allocation limit: {} MiB (excludes JIT and GPU allocations)", state.guest_bytes_limit / (1024 * 1024));
+#endif
 #ifdef _WIN32
     SYSTEM_INFO system_info = {};
     GetSystemInfo(&system_info);
@@ -183,6 +189,11 @@ bool is_valid_addr_range(const MemState &state, Address start, Address end) {
 }
 
 static Address alloc_inner(MemState &state, uint32_t start_page, uint32_t page_count, const char *name, const bool force) {
+    const uint64_t requested_bytes = static_cast<uint64_t>(page_count) * STANDARD_PAGE_SIZE;
+    if (page_count == 0 || start_page >= state.allocator.max_offset
+        || page_count > state.allocator.max_offset - start_page || requested_bytes > UINT32_MAX
+        || (state.guest_bytes_limit && (state.guest_bytes_used > state.guest_bytes_limit || requested_bytes > state.guest_bytes_limit - state.guest_bytes_used)))
+        return 0;
     int page_num;
     if (force) {
         if (state.allocator.allocate_at(start_page, page_count) < 0) {
@@ -206,11 +217,16 @@ static Address alloc_inner(MemState &state, uint32_t start_page, uint32_t page_c
     // Make memory chunk available to access
 #ifdef _WIN32
     const void *const ret = VirtualAlloc(commit_ptr, commit_size, MEM_COMMIT, PAGE_READWRITE);
-    LOG_CRITICAL_IF(!ret, "VirtualAlloc failed: {}", get_error_msg());
+    const bool commit_failed = !ret;
 #else
     const int ret = mprotect(commit_ptr, commit_size, PROT_READ | PROT_WRITE);
-    LOG_CRITICAL_IF(ret == -1, "mprotect failed: {}", get_error_msg());
+    const bool commit_failed = ret == -1;
 #endif
+    if (commit_failed) {
+        state.allocator.free(page_num, page_count);
+        return 0;
+    }
+    state.guest_bytes_used += requested_bytes;
     std::memset(&state.memory[addr], 0, size);
 
     AllocMemPage &page = state.alloc_table[page_num];
@@ -229,9 +245,13 @@ Address alloc_aligned(MemState &state, uint32_t size, const char *name, unsigned
     if (alignment == 0)
         return alloc(state, size, name, start_addr);
     const std::lock_guard<std::mutex> lock(state.generation_mutex);
+    if (size == 0 || (alignment & (alignment - 1)) || size > UINT32_MAX - alignment - (STANDARD_PAGE_SIZE - 1))
+        return 0;
     size += alignment;
     const uint32_t page_count = align(size, STANDARD_PAGE_SIZE) / STANDARD_PAGE_SIZE;
     const Address addr = alloc_inner(state, start_addr / STANDARD_PAGE_SIZE, page_count, name, false);
+    if (!addr)
+        return 0;
     const Address align_addr = align(addr, alignment);
     const uint32_t page_num = addr / STANDARD_PAGE_SIZE;
     const uint32_t align_page_num = align_addr / STANDARD_PAGE_SIZE;
@@ -241,6 +261,7 @@ Address alloc_aligned(MemState &state, uint32_t size, const char *name, unsigned
         AllocMemPage &align_page = state.alloc_table[align_page_num];
         const uint32_t remnant_front = align_page_num - page_num;
         state.allocator.free(page_num, remnant_front);
+        state.guest_bytes_used -= static_cast<uint64_t>(remnant_front) * STANDARD_PAGE_SIZE;
         page.allocated = 0;
         align_page.allocated = 1;
         align_page.size = page.size - remnant_front;
@@ -494,6 +515,8 @@ void remove_external_mapping(MemState &mem, uint8_t *addr_ptr, uint32_t size) {
 
 Address alloc(MemState &state, uint32_t size, const char *name, Address start_addr) {
     const std::lock_guard<std::mutex> lock(state.generation_mutex);
+    if (size == 0 || size > UINT32_MAX - (STANDARD_PAGE_SIZE - 1))
+        return 0;
     const uint32_t page_count = align(size, STANDARD_PAGE_SIZE) / STANDARD_PAGE_SIZE;
     const Address addr = alloc_inner(state, start_addr / STANDARD_PAGE_SIZE, page_count, name, false);
     return addr;
@@ -508,6 +531,8 @@ Address alloc_at(MemState &state, Address address, uint32_t size, const char *na
 Address try_alloc_at(MemState &state, Address address, uint32_t size, const char *name) {
     const std::lock_guard<std::mutex> lock(state.generation_mutex);
     const uint32_t wanted_page = address / STANDARD_PAGE_SIZE;
+    if (size == 0 || static_cast<uint64_t>(size) + address % STANDARD_PAGE_SIZE + STANDARD_PAGE_SIZE - 1 > UINT32_MAX)
+        return 0;
     size += address % STANDARD_PAGE_SIZE;
     const uint32_t page_count = align(size, STANDARD_PAGE_SIZE) / STANDARD_PAGE_SIZE;
     const Address addr = alloc_inner(state, wanted_page, page_count, name, true);
@@ -548,7 +573,9 @@ void free(MemState &state, Address address) {
     AllocMemPage &page = state.alloc_table[page_num];
     if (!page.allocated) {
         LOG_CRITICAL("Freeing unallocated page");
+        return;
     }
+    state.guest_bytes_used -= static_cast<uint64_t>(page.size) * STANDARD_PAGE_SIZE;
     page.allocated = 0;
 
     state.allocator.free(page_num, page.size);
@@ -586,7 +613,11 @@ void free(MemState &state, Address address) {
 }
 
 uint32_t mem_available(MemState &state) {
-    return state.allocator.free_slot_count(0, state.allocator.max_offset) * STANDARD_PAGE_SIZE;
+    const std::lock_guard<std::mutex> lock(state.generation_mutex);
+    uint64_t available = static_cast<uint64_t>(state.allocator.free_slot_count(0, state.allocator.max_offset)) * STANDARD_PAGE_SIZE;
+    if (state.guest_bytes_limit)
+        available = std::min(available, state.guest_bytes_limit > state.guest_bytes_used ? state.guest_bytes_limit - state.guest_bytes_used : uint64_t{ 0 });
+    return static_cast<uint32_t>(std::min(available, static_cast<uint64_t>(UINT32_MAX)));
 }
 
 const char *mem_name(Address address, MemState &state) {
@@ -612,6 +643,7 @@ void deinit_mem(MemState &state) {
     state.external_mapping.clear();
     state.use_page_table = false;
     state.host_page_size = 0;
+    state.guest_bytes_used = 0;
 }
 
 #ifdef _WIN32

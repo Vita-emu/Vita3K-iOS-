@@ -25,6 +25,8 @@ struct SettingsView: View {
     private var normalListArtwork = NormalListArtwork.coverArt.rawValue
     @AppStorage(LibrarySortOption.defaultsKey)
     private var librarySort = LibrarySortOption.alphabetical.rawValue
+    @AppStorage("tsubomi.cpuBackend") private var cpuBackend = 0
+    @AppStorage("tsubomi.guestMemoryMiB") private var guestMemoryMiB = 768
     @AppStorage("tsubomi.precompileShaders") private var precompileShaders = false
     @AppStorage("tsubomi.jitCacheMiB") private var jitCacheMiB = 0
     @AppStorage("tsubomi.shaderWorkers") private var shaderWorkers = 0
@@ -45,25 +47,45 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                if !model.isPerGame && runtimeLatch.revealed {
-                    runtimeSection
+                Section("Emulation") {
+                    NavigationLink {
+                        settingsPage("CPU & Execution") { cpuSection }
+                    } label: { Label("CPU & Execution", systemImage: "cpu") }
+                    if !model.isPerGame {
+                        NavigationLink {
+                            settingsPage("Memory") { memorySection }
+                        } label: { Label("Memory", systemImage: "memorychip") }
+                    }
+                    NavigationLink {
+                        settingsPage("Graphics & Display") { videoSection; graphicsSection; shaderSection }
+                    } label: { Label("Graphics & Display", systemImage: "cube") }
+                    NavigationLink {
+                        settingsPage("Audio") { audioSection }
+                    } label: { Label("Audio", systemImage: "speaker.wave.2") }
                 }
                 if !model.isPerGame {
-                    generalSection
-                    librarySection
-                    memorySection
+                    Section("Interface & Input") {
+                        NavigationLink {
+                            settingsPage("General") { generalSection }
+                        } label: { Label("General", systemImage: "gearshape") }
+                        NavigationLink {
+                            settingsPage("Library & Saves") { librarySection }
+                        } label: { Label("Library & Saves", systemImage: "books.vertical") }
+                        NavigationLink {
+                            settingsPage("Controls") { controlsSection }
+                        } label: { Label("Controls", systemImage: "gamecontroller") }
+                        NavigationLink {
+                            settingsPage("Performance Overlay") { performanceOverlaySection }
+                        } label: { Label("Performance Overlay", systemImage: "chart.xyaxis.line") }
+                    }
+                    Section("System") {
+                        NavigationLink {
+                            settingsPage("Firmware") { firmwareSection }
+                        } label: { Label("Firmware", systemImage: "internaldrive") }
+                    }
+                    if runtimeLatch.revealed { runtimeSection }
                 }
-                videoSection
-                graphicsSection
-                audioSection
-                if !model.isPerGame {
-                    controlsSection
-                    performanceOverlaySection
-                    firmwareSection
-                }
-                if model.isPerGame {
-                    perGameResetSection
-                }
+                if model.isPerGame { perGameResetSection }
             }
             .onDisappear { model.save() }
             .onChange(of: scenePhase) { phase in
@@ -101,7 +123,9 @@ struct SettingsView: View {
     private var generalSection: some View {
         Section {
             DefaultsToggle("Interface sound effects", key: .soundEffects)
-            DefaultsToggle("Liquid Glass", key: .liquidGlassInGame)
+            if #available(iOS 26.0, *) {
+                DefaultsToggle("Liquid Glass", key: .liquidGlassInGame)
+            }
             Toggle("Orientation lock", isOn: $orientationLockEnabled)
                 .onChange(of: orientationLockEnabled) { isEnabled in
                     Bridge.setOrientationLockEnabled(isEnabled)
@@ -165,17 +189,48 @@ struct SettingsView: View {
         Bridge.presentLibraryArchiveImportPicker()
     }
 
-    private var memorySection: some View {
+    private func settingsPage<Content: View>(_ title: String,
+        @ViewBuilder content: () -> Content) -> some View {
+        Form { content() }
+            .navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
+            .onDisappear { model.save() }
+    }
+
+    private var cpuSection: some View {
         Section {
-            Picker("JIT cache per guest thread", selection: $jitCacheMiB) {
-                Text("Automatic").tag(0)
-                ForEach([4, 8, 12, 16, 24, 32], id: \.self) { value in
-                    Text("\(value) MiB").tag(value)
+            if !model.isPerGame {
+                Picker("CPU backend", selection: $cpuBackend) {
+                    Text("Dynarmic JIT").tag(0)
+                    Text("IR Interpreter (experimental)").tag(1)
+                }
+                LabeledContent("Active backend", value: Bridge.cpuRequiresJIT ? "Dynarmic JIT" : "IR Interpreter")
+                if cpuBackend == 0 {
+                    Picker("JIT cache per guest thread", selection: $jitCacheMiB) {
+                        Text("Automatic").tag(0)
+                        ForEach([4, 8, 12, 16, 24, 32], id: \.self) { value in
+                            Text("\(value) MiB").tag(value)
+                        }
+                    }
                 }
             }
-            Picker("Shader compiler threads", selection: $shaderWorkers) {
-                Text("Automatic").tag(0)
-                ForEach(1...4, id: \.self) { value in Text("\(value)").tag(value) }
+            Toggle("JIT CPU optimizations", isOn: $model.cpuOptimizations)
+                .disabled(cpuBackend == 1)
+        } header: {
+            Text("CPU")
+        } footer: {
+            Text("""
+                Backend and JIT cache changes require closing and reopening Tsubomi.                 JIT is the default for games and requires JIT permission.                 The experimental IR Interpreter runs supported ARM/Thumb integer instructions without JIT permission or an executable code cache.                 It is slower, does not support VFP/NEON or exclusive instructions yet, and stops with an error in the log on unsupported instructions. Use JIT for general games.                 CPU optimizations apply to JIT on the next game launch. Automatic JIT cache uses 8 MiB per thread on a 3 GB device; this is not total thread RAM.
+                """)
+        }
+    }
+
+    private var memorySection: some View {
+        Section {
+            Picker("Guest RAM allocation limit", selection: $guestMemoryMiB) {
+                ForEach([512, 768, 1024], id: \.self) { value in
+                    Text("\(value) MiB").tag(value)
+                }
             }
             Picker("Texture cache", selection: $textureCacheEntries) {
                 Text("Automatic").tag(0)
@@ -183,9 +238,9 @@ struct SettingsView: View {
                     Text("\(value) textures").tag(value)
                 }
             }
-            Toggle("Precompile cached shaders at launch", isOn: $precompileShaders)
             Toggle("Trim oversized upload buffers", isOn: $trimStagingBuffers)
             Button("Use iPhone 8 Plus memory settings") {
+                guestMemoryMiB = 768
                 jitCacheMiB = 8
                 shaderWorkers = 1
                 textureCacheEntries = 128
@@ -193,7 +248,8 @@ struct SettingsView: View {
                 precompileShaders = false
                 model.useLowerMemoryPreset()
             }
-            Button("Reset memory settings to Automatic") {
+            Button("Reset memory settings") {
+                guestMemoryMiB = 768
                 jitCacheMiB = 0
                 shaderWorkers = 0
                 textureCacheEntries = 0
@@ -201,11 +257,31 @@ struct SettingsView: View {
                 precompileShaders = false
             }
         } header: {
-            Text("JIT & Memory")
+            Text("Allocation & Caches")
         } footer: {
             Text("""
-                Saved immediately. Close and reopen Tsubomi to apply these settings; no rebuild is needed.                 Automatic uses 8 MiB per JIT thread and 128 cached textures on a 3 GB phone.                 JIT cache is translated code, not all RAM used by a thread. 4 MiB saves more memory but can cause frequent recompilation and stutter; start with 8 MiB.                 Shader threads control background GPU compilation, not the game's CPU core count; fewer use less memory but compile more slowly.                 A smaller texture cache may cause extra uploads. Leave shader precompilation off to compile only when needed; first use may stutter. Upload buffer trimming releases oversized temporary GPU buffers after reuse becomes safe.                 These limits do not cap total app RAM or guarantee 30 FPS.
+                Saved immediately; close and reopen Tsubomi to apply.                 The default 768 MiB limit covers allocated guest pages. Memory is committed only when requested and the budget is returned when freed.                 It excludes JIT, textures, the graphics driver and the interface, so total app RAM may exceed 768 MiB. Games exceeding the limit receive allocation failures.                 The required 4 GiB virtual address space is retained; it is not 4 GiB of physical RAM.                 Texture limits count entries, not bytes. Upload buffers shrink after the GPU has finished using them.
                 """)
+        }
+    }
+
+    private var shaderSection: some View {
+        Section {
+            Toggle("Shader disk cache", isOn: $model.shaderCache)
+            Toggle("Async pipeline compilation", isOn: $model.asyncPipelineCompilation)
+            if !model.isPerGame {
+                Picker("Shader compiler threads", selection: $shaderWorkers) {
+                    Text("Automatic").tag(0)
+                    ForEach(1...4, id: \.self) { value in Text("\(value)").tag(value) }
+                }
+                .disabled(!model.asyncPipelineCompilation)
+                Toggle("Precompile cached shaders at launch", isOn: $precompileShaders)
+                    .disabled(!model.shaderCache)
+            }
+        } header: {
+            Text("Shaders")
+        } footer: {
+            Text("Disk cache and async compilation apply on the next game launch. Worker count and precompilation require an app restart. Workers compile shaders on the CPU; the GPU executes them. Fewer workers reduce concurrent compilation memory. Precompilation requires disk caching; leaving it off can cause first-use stutter.")
         }
     }
 
@@ -213,8 +289,6 @@ struct SettingsView: View {
         Section("Video") {
             Toggle("V-Sync", isOn: $model.vSync)
                 .accessibilityHint("Synchronizes presentation to the display.")
-            Toggle("Shader cache", isOn: $model.shaderCache)
-                .accessibilityHint("Reuses compiled shaders between sessions. Turn off to force regeneration when diagnosing a graphics fault.")
         }
     }
 
@@ -242,7 +316,6 @@ struct SettingsView: View {
             Toggle("High accuracy", isOn: $model.highAccuracy)
             Toggle("Surface sync", isOn: $model.surfaceSync)
             Toggle("Double buffer", isOn: $model.doubleBuffer)
-            Toggle("Async pipeline compilation", isOn: $model.asyncPipelineCompilation)
 
             Picker("Anisotropic filtering", selection: $model.anisotropicFiltering) {
                 ForEach(SettingsModel.anisotropicOptions, id: \.self) { value in
@@ -269,9 +342,8 @@ struct SettingsView: View {
         Section {
             Toggle("NGS audio", isOn: $model.ngsAudio)
             LabeledContent("Audio backend", value: "SDL")
-            Toggle("CPU optimizations", isOn: $model.cpuOptimizations)
         } header: {
-            Text("Audio & CPU")
+            Text("Audio")
         } footer: {
             Text("NGS is full Vita audio emulation; disable it only while diagnosing a problem.")
         }
