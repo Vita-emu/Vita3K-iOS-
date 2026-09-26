@@ -53,6 +53,7 @@
 #include <touch/functions.h>
 #include <touch/state.h>
 #include <util/fs.h>
+#include <util/ios_runtime_tuning.h>
 #include <util/log.h>
 
 #include <miniz.h>
