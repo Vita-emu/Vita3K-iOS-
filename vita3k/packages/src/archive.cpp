@@ -1,5 +1,6 @@
 #include <packages/archive.h>
 
+#include <packages/license_file.h>
 #include <packages/sfo.h>
 
 #include <util/log.h>
@@ -13,6 +14,7 @@
 #include <limits>
 #include <set>
 #include <sstream>
+#include <stdexcept>
 #include <string_view>
 
 namespace packages {
@@ -151,7 +153,9 @@ std::string install_target(const sfo::SfoAppInfo &app) {
     if (app.app_category.find("gp") != std::string::npos)
         return "ux0/patch/" + app.app_title_id;
     if (app.app_category == "ac")
-        return "ux0/addcont/" + app.app_title_id;
+        return valid_content_id(app.app_content_id) && app.app_content_id.substr(7, 9) == app.app_title_id
+            ? "ux0/addcont/" + app.app_title_id + "/" + app.app_content_id.substr(20)
+            : std::string{};
     return "ux0/app/" + app.app_title_id;
 }
 
@@ -170,6 +174,7 @@ ArchiveInspection inspect_open_archive(mz_zip_archive &zip) {
     };
     std::vector<SfoEntry> sfo_entries;
     std::set<std::string> roots;
+    std::set<std::string> paths;
     for (mz_uint index = 0; index < entry_count; ++index) {
         mz_zip_archive_file_stat stat{};
         if (!mz_zip_reader_file_stat(&zip, index, &stat)) {
@@ -181,7 +186,7 @@ ArchiveInspection inspect_open_archive(mz_zip_archive &zip) {
             ++result.unsafe_path_count;
             continue;
         }
-        if (!safe_archive_path(name)) {
+        if (!safe_archive_path(name) || !paths.insert(name).second) {
             ++result.unsafe_path_count;
             continue;
         }
@@ -216,7 +221,7 @@ ArchiveInspection inspect_open_archive(mz_zip_archive &zip) {
         }
         sfo::SfoAppInfo app;
         sfo::get_param_info(app, buffer.bytes, 1);
-        if (!safe_title_id(app.app_title_id) || app.app_title.empty()) {
+        if (!safe_title_id(app.app_title_id) || app.app_title.empty() || install_target(app).empty()) {
             result.detail = "Archive PARAM.SFO is malformed or has an unsafe title identity.";
             return result;
         }
@@ -276,7 +281,7 @@ ArchiveInspection inspect_archive(const std::filesystem::path &path) {
 }
 
 ArchiveInstallResult install_archive_transactionally(const std::filesystem::path &archive_path,
-    const std::filesystem::path &vfs_root, const std::function<void(uint32_t)> &progress) {
+    const std::filesystem::path &vfs_root, const std::function<void(uint32_t)> &progress, const ArchivePrepare &prepare) {
     ArchiveInstallResult result{ .attempted = true };
     mz_zip_archive zip{};
     const auto path_text = archive_path.string();
@@ -395,11 +400,104 @@ ArchiveInstallResult install_archive_transactionally(const std::filesystem::path
         ++result.file_count;
         result.bytes_written += output.written;
     }
+    // A full NoNpDrm dump may keep licenses beside app/patch/addcont instead
+    // of embedding work.bin. Import only licenses named for discovered content.
+    for (mz_uint index = 0; index < entry_count; ++index) {
+        std::string name;
+        if (!read_archive_path(zip, index, name) || !name.ends_with(".rif")
+            || !(name.starts_with("license/") || name.find("/license/") != std::string::npos))
+            continue;
+        for (const auto &application : inspection.applications) {
+            if (!valid_content_id(application.content_id)
+                || std::filesystem::path(name).filename() != application.content_id + ".rif")
+                continue;
+            mz_zip_archive_file_stat stat{};
+            SfoBuffer buffer;
+            if (!mz_zip_reader_file_stat(&zip, index, &stat) || stat.m_uncomp_size != 512
+                || !mz_zip_reader_extract_to_callback(&zip, index, append_sfo, &buffer, 0)
+                || buffer.bytes.size() != 512)
+                return fail("Invalid bundled RIF license for " + application.title_id);
+            const auto work = payload_root / application.install_target / "sce_sys/package/work.bin";
+            if (std::filesystem::exists(work, error)) {
+                std::array<std::uint8_t, 512> existing{};
+                std::string id;
+                if (!read_license_file(work, existing, id)
+                    || !std::equal(existing.begin(), existing.end(), buffer.bytes.begin()))
+                    return fail("Conflicting bundled licenses for " + application.title_id);
+            } else {
+                std::filesystem::create_directories(work.parent_path(), error);
+                if (error)
+                    return fail("Could not stage bundled license: " + error.message());
+                std::ofstream output(work, std::ios::binary);
+                output.write(reinterpret_cast<const char *>(buffer.bytes.data()), buffer.bytes.size());
+                output.close();
+                if (!output)
+                    return fail("Could not write bundled license");
+            }
+        }
+    }
     mz_zip_reader_end(&zip);
 
     if (result.file_count == 0) {
         cleanup();
         result.detail = "Installation rejected: no application files matched the discovered roots.";
+        return result;
+    }
+
+    std::set<std::string> license_targets;
+    try {
+        for (const auto &application : inspection.applications) {
+            const auto source = payload_root / application.install_target / "sce_sys/package/work.bin";
+            if (!std::filesystem::exists(source))
+                continue;
+            std::array<std::uint8_t, 512> bytes{};
+            std::string content_id;
+            if (!read_license_file(source, bytes, content_id) || content_id != application.content_id || content_id.substr(7, 9) != application.title_id) {
+                cleanup();
+                result.detail = "Invalid or mismatched work.bin for " + application.title_id;
+                return result;
+            }
+            const auto target = "ux0/license/" + application.title_id + "/" + content_id + ".rif";
+            const auto license = payload_root / target;
+            if (license_targets.insert(target).second) {
+                std::filesystem::create_directories(license.parent_path());
+                std::filesystem::copy_file(source, license);
+            } else {
+                std::array<std::uint8_t, 512> existing{};
+                std::string existing_id;
+                if (!read_license_file(license, existing, existing_id) || bytes != existing)
+                    throw std::runtime_error("Conflicting bundled licenses for " + content_id);
+            }
+        }
+        for (const auto &application : inspection.applications) {
+            const auto base = "ux0/app/" + application.title_id;
+            if (application.category.find("gp") != std::string::npos
+                && !unique_targets.contains(base) && !std::filesystem::is_directory(vfs_root / base))
+                throw std::runtime_error("Install the base game before its update: " + application.title_id);
+            std::string preparation_error;
+            if (prepare) {
+                if (!prepare(application, payload_root, preparation_error))
+                    throw std::runtime_error(preparation_error.empty() ? "Content preparation failed" : preparation_error);
+            } else if (std::filesystem::exists(payload_root / application.install_target / "sce_pfs")) {
+                throw std::runtime_error("NoNpDrm content requires PFS decryption support");
+            }
+            const auto staged = payload_root / application.install_target;
+            const auto metadata = staged / "sce_sys/param.sfo";
+            if (!std::filesystem::is_regular_file(metadata) || std::filesystem::file_size(metadata) > maximum_sfo_size)
+                throw std::runtime_error("Prepared content is missing bounded PARAM.SFO metadata");
+            std::ifstream input(metadata, std::ios::binary);
+            const std::vector<std::uint8_t> bytes((std::istreambuf_iterator<char>(input)), {});
+            sfo::SfoAppInfo prepared;
+            sfo::get_param_info(prepared, bytes, 1);
+            if (prepared.app_title_id != application.title_id || prepared.app_category != application.category
+                || prepared.app_content_id != application.content_id)
+                throw std::runtime_error("Prepared content identity does not match the selected package");
+            if (application.category == "gd" && !std::filesystem::is_regular_file(staged / EBOOT_PATH))
+                throw std::runtime_error("Game package is missing eboot.bin");
+        }
+    } catch (const std::exception &exception) {
+        cleanup();
+        result.detail = "Installation rejected: " + std::string(exception.what());
         return result;
     }
 
@@ -411,17 +509,19 @@ ArchiveInstallResult install_archive_transactionally(const std::filesystem::path
         bool installed{};
     };
     std::vector<TargetMove> moves;
-    moves.reserve(inspection.applications.size());
-    for (const auto &application : inspection.applications) {
-        const auto relative_target = std::filesystem::path(application.install_target);
+    auto commit_targets = unique_targets;
+    commit_targets.insert(license_targets.begin(), license_targets.end());
+    moves.reserve(commit_targets.size());
+    for (const auto &target : commit_targets) {
+        const auto relative_target = std::filesystem::path(target);
         if (existing_parent_has_symlink(vfs_root, relative_target.parent_path(), error)) {
             cleanup();
             result.detail = "Installation rejected a symlinked Vita destination path.";
             return result;
         }
-        moves.push_back({ .staged = payload_root / application.install_target,
-            .destination = vfs_root / application.install_target,
-            .backup = backup_root / application.install_target });
+        moves.push_back({ .staged = payload_root / target,
+            .destination = vfs_root / target,
+            .backup = backup_root / target });
         if (!std::filesystem::exists(moves.back().staged, error) || error) {
             cleanup();
             result.detail = "Installation transaction is missing a staged application root.";
@@ -430,6 +530,8 @@ ArchiveInstallResult install_archive_transactionally(const std::filesystem::path
     }
 
     const auto rollback = [&]() {
+        bool restored = true;
+        result.installed_targets.clear();
         for (auto iterator = moves.rbegin(); iterator != moves.rend(); ++iterator) {
             std::error_code ignored;
             if (iterator->installed)
@@ -438,8 +540,13 @@ ArchiveInstallResult install_archive_transactionally(const std::filesystem::path
                 std::filesystem::create_directories(iterator->destination.parent_path(), ignored);
                 std::filesystem::rename(iterator->backup, iterator->destination, ignored);
             }
+            if (ignored)
+                restored = false;
         }
-        cleanup();
+        if (restored)
+            cleanup();
+        else
+            LOG_ERROR("Installation rollback incomplete; recovery files retained at {}", transaction_root.string());
     };
 
     for (auto &move : moves) {
@@ -469,8 +576,9 @@ ArchiveInstallResult install_archive_transactionally(const std::filesystem::path
             return result;
         }
         move.installed = true;
-        result.installed_targets.push_back(
-            std::filesystem::relative(move.destination, vfs_root).generic_string());
+        const auto target = std::filesystem::relative(move.destination, vfs_root).generic_string();
+        if (unique_targets.contains(target))
+            result.installed_targets.push_back(target);
     }
 
     cleanup();
@@ -490,6 +598,62 @@ ArchiveInstallResult install_archive_transactionally(const std::filesystem::path
     }
     detail << ".";
     result.detail = detail.str();
+    return result;
+}
+
+ArchiveInstallResult install_directory_transactionally(const std::filesystem::path &directory,
+    const std::filesystem::path &vfs_root, const std::function<void(uint32_t)> &progress, const ArchivePrepare &prepare) {
+    ArchiveInstallResult result{ .attempted = true };
+    struct TemporaryArchive {
+        std::filesystem::path root;
+        mz_zip_archive zip{};
+        ~TemporaryArchive() {
+            if (zip.m_pState)
+                mz_zip_writer_end(&zip);
+            std::error_code ignored;
+            if (!root.empty())
+                std::filesystem::remove_all(root, ignored);
+        }
+    } temporary;
+    try {
+        if (!std::filesystem::is_directory(directory) || std::filesystem::is_symlink(directory))
+            throw std::runtime_error("Select a regular game directory");
+        static std::atomic_uint64_t counter{};
+        for (;;) {
+            const auto candidate = std::filesystem::temp_directory_path() / ("vita3k-import-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + "-" + std::to_string(counter.fetch_add(1)));
+            if (std::filesystem::create_directory(candidate)) {
+                temporary.root = candidate;
+                break;
+            }
+        }
+        const auto archive = temporary.root / "content.zip";
+        if (!mz_zip_writer_init_file_v2(&temporary.zip, archive.string().c_str(), 0, MZ_ZIP_FLAG_WRITE_ZIP64))
+            throw std::runtime_error("Could not create temporary directory import archive");
+        std::uint64_t total = 0;
+        std::size_t entries = 0;
+        // Store files without compression. miniz reads from disk in bounded chunks;
+        // the temporary archive lets directory imports share the same transaction.
+        for (const auto &entry : std::filesystem::recursive_directory_iterator(directory)) {
+            if (++entries > maximum_archive_entries || entry.is_symlink())
+                throw std::runtime_error("Directory contains a symlink or too many entries");
+            if (entry.is_directory())
+                continue;
+            if (!entry.is_regular_file() || !add_without_overflow(total, entry.file_size())
+                || total > maximum_archive_install_size)
+                throw std::runtime_error("Directory contains unsupported files or exceeds 32 GiB");
+            const auto relative = entry.path().lexically_relative(directory).generic_string();
+            if (!safe_archive_path(relative) || relative.size() >= maximum_archive_path_size)
+                throw std::runtime_error("Directory contains an unsafe path");
+            if (!mz_zip_writer_add_file(&temporary.zip, relative.c_str(), entry.path().string().c_str(), nullptr, 0, 0))
+                throw std::runtime_error("Could not read game directory or write temporary archive; check free storage");
+        }
+        if (!mz_zip_writer_finalize_archive(&temporary.zip))
+            throw std::runtime_error("Could not finish directory import archive");
+        mz_zip_writer_end(&temporary.zip);
+        result = install_archive_transactionally(archive, vfs_root, progress, prepare);
+    } catch (const std::exception &error) {
+        result.detail = error.what();
+    }
     return result;
 }
 

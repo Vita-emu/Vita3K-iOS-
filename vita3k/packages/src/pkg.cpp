@@ -33,6 +33,7 @@
 
 #include <packages/functions.h>
 #include <packages/license.h>
+#include <packages/license_file.h>
 #include <packages/pkg.h>
 #include <packages/sce_types.h>
 #include <packages/sfo.h>
@@ -56,23 +57,47 @@ static int execute(std::string &zrif, fs::path &title_src, fs::path &title_dst, 
     return execute(zrif, title_src_str, title_dst_str, type, f00d_arg);
 }
 
-bool decrypt_install_nonpdrm(EmuEnvState &emuenv, const fs::path &drmlicpath, const fs::path &title_path) {
+bool decrypt_install_nonpdrm(EmuEnvState &emuenv, const fs::path &drmlicpath, const fs::path &title_path, bool persist_license) {
+    std::array<std::uint8_t, 512> license_bytes{};
+    std::string content_id;
+    if (!packages::read_license_file(std::filesystem::path(drmlicpath.string()), license_bytes, content_id))
+        return false;
     fs::path title_id_src = title_path;
     fs::path title_id_dst = fs_utils::path_concat(title_path, "_dec");
-    fs::ifstream binfile(drmlicpath, std::ios::in | std::ios::binary | std::ios::ate);
-    std::string zRIF = rif2zrif(binfile);
-    F00DEncryptorTypes f00d_enc_type = F00DEncryptorTypes::native;
-    std::string f00d_arg = std::string();
-
-    if ((execute(zRIF, title_id_src, title_id_dst, f00d_enc_type, f00d_arg) < 0) && (title_path.string().find("theme") == std::string::npos))
+    const auto backup = fs_utils::path_concat(title_path, "_encrypted_backup");
+    // Never reuse stale output from a failed earlier operation.
+    if (fs::exists(title_id_dst) || fs::exists(backup))
         return false;
-
-    if (!emuenv.app_info.app_category.contains("gp"))
-        copy_license(emuenv, drmlicpath);
-
-    fs::remove_all(title_id_src);
-    fs::rename(title_id_dst, title_id_src);
-
+    bool backed_up = false;
+    try {
+        fs::ifstream binfile(drmlicpath, std::ios::in | std::ios::binary | std::ios::ate);
+        std::string zRIF = rif2zrif(binfile);
+        std::string f00d_arg;
+        if (execute(zRIF, title_id_src, title_id_dst, F00DEncryptorTypes::native, f00d_arg) < 0
+            || !fs::is_directory(title_id_dst)) {
+            fs::remove_all(title_id_dst);
+            return false;
+        }
+        if (persist_license && !copy_license(emuenv, drmlicpath)) {
+            fs::remove_all(title_id_dst);
+            return false;
+        }
+        fs::rename(title_id_src, backup);
+        backed_up = true;
+        fs::rename(title_id_dst, title_id_src);
+    } catch (const std::exception &error) {
+        LOG_ERROR("NoNpDrm preparation failed: {}", error.what());
+        boost::system::error_code cleanup_error;
+        if (backed_up) {
+            fs::rename(backup, title_id_src, cleanup_error);
+            if (cleanup_error)
+                LOG_ERROR("Encrypted content retained for recovery at {}", backup);
+        }
+        fs::remove_all(title_id_dst, cleanup_error);
+        return false;
+    }
+    boost::system::error_code cleanup_error;
+    fs::remove_all(backup, cleanup_error);
     return true;
 }
 

@@ -9,6 +9,7 @@ add_library(packages STATIC
             include/packages/archive.h
             include/packages/exfat.h
             include/packages/license.h
+            include/packages/license_file.h
             include/packages/functions.h
             include/packages/pkg.h
             include/packages/sce_types.h

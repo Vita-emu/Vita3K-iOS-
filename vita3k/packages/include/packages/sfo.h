@@ -30,7 +30,7 @@
 #include <utility> // pair
 #include <vector>
 
-static const char *EBOOT_PATH = "eboot.bin";
+inline constexpr const char *EBOOT_PATH = "eboot.bin";
 
 enum SfoDataFormat : uint16_t {
     UTF8 = 0x0004, // UTF-8 Encoding

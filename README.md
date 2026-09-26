@@ -41,10 +41,14 @@ that you are complying with the laws in your jurisdiction.
 2. Launch Tsubomi. On first run it creates its data folder at
    **`Documents/Tsubomi`** (visible in the Files app — file sharing is enabled).
 3. Add content with the **+** button in the library:
-   - **Import game (.vpk / .zip)** — a Vita app package.
+   - **Import game (.vpk / .zip / .pkg)** — a Vita app package.
    - **Import firmware (.PUP)** — a PS Vita firmware update.
-   - If a game is a NoNpDrm dump, Tsubomi prompts for its **work.bin** license and
-     decrypts the content in place.
+   - **Import game folder (NoNpDrm)** — select an extracted game folder or a
+     folder containing `app`, `patch`, and `addcont`.
+   - NoNpDrm imports use the bundled **work.bin** or a matching installed license,
+     and decrypt in staging before replacing the installed game. If the license
+     is separate, import it first, then import the game.
+     See [game import formats and troubleshooting](docs/game-import.md).
    Alternatively, copy your desktop **Vita3K** data folder into
    `Documents/Tsubomi/vita` in the Files app and tap **Refresh**.
 

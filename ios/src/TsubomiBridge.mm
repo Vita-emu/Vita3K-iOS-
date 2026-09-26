@@ -425,6 +425,10 @@ id bridge_games() {
     vita3k_ios_internal::present_game_picker();
 }
 
++ (void)presentGameFolderImportPicker {
+    vita3k_ios_internal::present_game_folder_picker();
+}
+
 + (void)presentLicenseImportPicker {
     vita3k_ios_internal::present_license_import_picker();
 }

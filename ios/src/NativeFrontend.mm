@@ -337,6 +337,7 @@ Vita3KIOSSettings g_last_settings;
 std::vector<Vita3KIOSGameEntry> g_last_games;
 
 void present_import_picker(BOOL firmware);
+void present_folder_picker();
 void present_license_picker();
 void present_save_picker(NSString *titleId);
 void present_library_archive_picker();
@@ -807,6 +808,10 @@ std::optional<Vita3KIOSGameEntry> game_for_title(NSString *title_id) {
 
 void present_game_picker() {
     present_import_picker(NO);
+}
+
+void present_game_folder_picker() {
+    present_folder_picker();
 }
 
 void present_license_import_picker() {
@@ -1310,6 +1315,23 @@ void present_import_picker(BOOL firmware) {
     }
     [types addObject:UTTypeData];
     UIDocumentPickerViewController *picker = import_picker(types);
+    picker.delegate = g_import_picker;
+    picker.allowsMultipleSelection = NO;
+    [presenter presentViewController:picker animated:YES completion:nil];
+}
+
+void present_folder_picker() {
+    UIViewController *presenter = document_picker_presenter();
+    if (!presenter)
+        return;
+    if (!g_import_picker)
+        g_import_picker = [[Vita3KImportPicker alloc] init];
+    g_import_picker.kind = Vita3KIOSFrontendActionKind::ImportGame;
+    g_import_picker.titleId = nil;
+    // Directory access uses a security-scoped URL. The shared delegate copies
+    // it under file coordination before releasing access, on a worker queue.
+    UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc]
+        initForOpeningContentTypes:@[UTTypeFolder] asCopy:NO];
     picker.delegate = g_import_picker;
     picker.allowsMultipleSelection = NO;
     [presenter presentViewController:picker animated:YES completion:nil];

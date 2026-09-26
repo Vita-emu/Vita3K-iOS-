@@ -312,6 +312,13 @@ struct LibraryView: View {
                     Label("Import game (.vpk / .zip / .pkg)", systemImage: "arrow.down.doc")
                 }
                 Button {
+                    if Bridge.firmwareReadyOrPresentAlert() {
+                        Bridge.presentGameFolderImportPicker()
+                    }
+                } label: {
+                    Label("Import game folder (NoNpDrm)", systemImage: "folder.badge.plus")
+                }
+                Button {
                     Bridge.presentLicenseImportPicker()
                 } label: {
                     Label("Import license (work.bin)", systemImage: "key.fill")
