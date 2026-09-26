@@ -14,7 +14,7 @@ extension View {
                 .opacity(isFocused ? 1 : 0)
                 .padding(-4)
         }
-        .animation(.snappy(duration: 0.15), value: isFocused)
+        .animation(.compatibilitySnappy(duration: 0.15), value: isFocused)
         .accessibilityAddTraits(isFocused ? .isSelected : [])
     }
 }
@@ -34,6 +34,7 @@ struct GameCover: View {
     /// Normal list can explicitly request pic0.png without inheriting the
     /// grid/carousel Wide cover art switch.
     var forcesWide: Bool = false
+    @ObservedObject private var library = LibraryState.shared
     @State private var image: UIImage?
     @AppStorage(DefaultsKey.wideCoverArt.rawValue) private var wideCoverArt = true
 
@@ -64,10 +65,10 @@ struct GameCover: View {
             // clipShape alone does not stop an overflowing overlay from being
             // drawn outside the bounds; clipped() bounds it first.
             .clipped()
-            .clipShape(.rect(cornerRadius: cornerRadius, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             // Keyed on path and art generation: the path alone does not change
             // when an install/license makes art appear.
-            .task(id: "\(artPath)#\(LibraryState.shared.artGeneration)#\(wideCoverArt)") {
+            .task(id: "\(artPath)#\(library.artGeneration)#\(wideCoverArt)") {
                 image = await CoverImageLoader.image(atPath: artPath)
             }
     }
@@ -177,7 +178,7 @@ struct GameCard: View {
         // card disappear into its white parent. This matching non-grouped
         // semantic level stays distinct in both appearances.
         .background(Color(.secondarySystemBackground),
-                    in: .rect(cornerRadius: 26, style: .continuous))
+                    in: RoundedRectangle(cornerRadius: 26, style: .continuous))
         .accessibilityElement(children: .combine)
     }
 }
@@ -236,7 +237,7 @@ struct GameRow: View {
             Spacer(minLength: 0)
         }
         .padding(.vertical, 4)
-        .contentShape(.rect)
+        .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
     }
 
@@ -257,7 +258,7 @@ struct GameRow: View {
             Spacer(minLength: 0)
         }
         .padding(.vertical, 2)
-        .contentShape(.rect)
+        .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
     }
 

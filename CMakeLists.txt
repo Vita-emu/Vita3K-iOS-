@@ -3,6 +3,14 @@ cmake_minimum_required(VERSION 3.22)
 option(VITA3K_BUILD_IOS "Build the experimental iOS bootstrap application" OFF)
 option(VITA3K_BUILD_IOS_UPSTREAM_CORE "Build the upstream Vita3K core for iOS" OFF)
 
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+	set(VITA3K_IOS_DEPLOYMENT_TARGET "16.7" CACHE STRING "Minimum supported iOS version")
+	if(VITA3K_IOS_DEPLOYMENT_TARGET VERSION_LESS "16.7")
+		message(FATAL_ERROR "The iOS frontend requires iOS 16.7 or newer.")
+	endif()
+	set(CMAKE_OSX_DEPLOYMENT_TARGET "${VITA3K_IOS_DEPLOYMENT_TARGET}" CACHE STRING "Apple deployment target" FORCE)
+endif()
+
 if(VITA3K_BUILD_IOS_UPSTREAM_CORE)
 	if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
 		message(FATAL_ERROR "VITA3K_BUILD_IOS_UPSTREAM_CORE requires an iOS toolchain.")
@@ -44,12 +52,8 @@ include("external/dynarmic/CMakeModules/DetectArchitecture.cmake")
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
-# iPhoneOS needs at least 16.3 for complete C++17 <charconv>/std::format
-# support in libc++; the iOS application targets 26.0 because its frontend is
-# built around Liquid Glass (see ios/CMakeLists.txt). macOS keeps 13.3.
-if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
-	set(CMAKE_OSX_DEPLOYMENT_TARGET 26.0)
-else()
+# Keep the desktop deployment target separate from the iOS setting above.
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
 	set(CMAKE_OSX_DEPLOYMENT_TARGET 13.3)
 endif()
 

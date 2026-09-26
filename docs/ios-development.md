@@ -1,5 +1,9 @@
 # Windows-first iOS development workflow
 
+> This document describes the historical bootstrap milestones. For the current
+> upstream-core app and iOS 16.7 / iPhone 8 Plus compatibility, see
+> [the compatibility guide](ios-16-compatibility.md).
+
 This guide sets up a Vita3K fork so Windows is the primary editing and testing environment while GitHub Actions supplies the Apple SDK/Xcode build step. The resulting artifact is unsigned. Installation, signing, sideloading, and runtime JIT activation are intentionally outside this repository and guide.
 
 ## 1. What this branch can and cannot do

@@ -117,7 +117,7 @@ struct DefaultsToggle: View {
 
     var body: some View {
         Toggle(title, isOn: $isOn)
-            .onChange(of: isOn) { _, newValue in
+            .onChange(of: isOn) { newValue in
                 if newValue { onEnable?() }
                 onChange?()
             }

@@ -10,6 +10,7 @@ import SwiftUI
 ///
 /// The dimming is computed from each cover's distance to the viewport centre
 /// with `visualEffect`; see the note in `cover(_:side:)`.
+@available(iOS 17.0, *)
 @MainActor
 struct CoverCarousel<Menu: View>: View {
     let games: [GameEntry]
@@ -174,7 +175,7 @@ struct CoverCarousel<Menu: View>: View {
                 .brightness(-0.22 * distance)
                 .saturation(1 - 0.2 * distance)
         }
-        .contentShape(.rect)
+        .contentShape(Rectangle())
         .onTapGesture { onLaunch(game) }
         .contextMenu { menu(game) }
         .accessibilityElement(children: .combine)

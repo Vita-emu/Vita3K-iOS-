@@ -7,7 +7,7 @@ import SwiftUI
 /// than being a bespoke panel as the UIKit version was.
 @MainActor
 struct ControllerOptionsView: View {
-    @State private var model = ControlsModel.shared
+    @ObservedObject private var model = ControlsModel.shared
     /// Called when the user chooses to reposition controls: the presenter has
     /// to dismiss this sheet so the overlay underneath is reachable.
     let onEditLayout: () -> Void
@@ -148,7 +148,7 @@ struct ControllerOptionsView: View {
     private var orientationSection: some View {
         Section {
             Toggle("Orientation Lock", isOn: $orientationLockEnabled)
-                .onChange(of: orientationLockEnabled) { _, enabled in
+                .onChange(of: orientationLockEnabled) { enabled in
                     Bridge.setOrientationLockEnabled(enabled)
                 }
             if orientationLockEnabled {
@@ -157,7 +157,7 @@ struct ControllerOptionsView: View {
                         Text(option.title).tag(option.rawValue)
                     }
                 }
-                .onChange(of: orientationLock) { _, newValue in
+                .onChange(of: orientationLock) { newValue in
                     Bridge.applyOrientationLock(newValue)
                 }
             }

@@ -1,5 +1,9 @@
 # Vita3K iOS bootstrap
 
+> This document describes the historical bootstrap milestones. For the current
+> upstream-core app and iOS 16.7 / iPhone 8 Plus compatibility, see
+> [the compatibility guide](../docs/ios-16-compatibility.md).
+
 This directory is an experimental, device-only iOS application for a future Vita3K port. It builds an unsigned IPA containing a UIKit/Metal host, file-backed logging, sandbox storage, and the first cross-compiled slices of upstream Vita3K code. It can transactionally install user-selected app/patch ZIPs, list installed titles, prefer a patch `eboot.bin`, safely prepare a selected Vita SELF, and make one explicitly confirmed interpreter attempt with a hard 65536-instruction ceiling. It also loads and completes the `module_start` of a deliberately tiny legal fixture, executes a tested baseline of compiler-generated Thumb arithmetic, memory, stack, and branch instructions, presents one core-owned Metal diagnostic frame, and captures normalized UIKit/GameController input. It does **not** yet execute general installed games, render Vita graphics, route input to guest services, or provide a production CPU/HLE implementation. See [MENU-BOOT-CHECKLIST.md](MENU-BOOT-CHECKLIST.md) for the remaining first-menu gates.
 
 The separation is intentional: upstream's current Apple target is a macOS desktop application using Qt, Cocoa, SDL, MoltenVK, and desktop-oriented dependency builds. Those pieces cannot simply be linked into an iOS application.

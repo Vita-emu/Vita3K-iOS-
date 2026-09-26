@@ -394,8 +394,13 @@ bool ios_jit_available() {
     // dynarmic's x64 backend needs no StikDebug session to be usable.
     return true;
 #else
-    return g_jit_pool_ready.load(std::memory_order_relaxed)
-        || (ios_jit_capability_enabled() && ios_debugger_attached());
+    if (__builtin_available(iOS 26.0, *)) {
+        return g_jit_pool_ready.load(std::memory_order_relaxed)
+            || (ios_jit_capability_enabled() && ios_debugger_attached());
+    }
+    // Earlier iOS uses Oaknut's ordinary RWX allocation. CS_DEBUGGED can
+    // remain set after the JIT enabler disconnects; no pool handshake is needed.
+    return ios_jit_capability_enabled();
 #endif
 }
 
@@ -2648,6 +2653,16 @@ bool prepare_ios_jit_pool() {
     vita3k_ios_set_jit_available(true);
     return true;
 #else
+    if (__builtin_available(iOS 26.0, *)) {
+        // Universal JIT below requires a live debugger during prewarming.
+    } else {
+        // Oaknut selects its ordinary RWX path on iOS 16–18. Sending the
+        // iOS 26 debugger breakpoint here would crash older JIT sessions.
+        const bool available = ios_jit_capability_enabled();
+        vita3k_ios_set_jit_available(available);
+        return available;
+    }
+
     if (!ios_debugger_attached())
         return false;
 
@@ -2736,8 +2751,8 @@ int main(int argc, char *argv[]) {
     const bool initial_jit_available = ios_jit_available();
     vita3k_ios_set_jit_available(initial_jit_available);
     LOG_INFO("iOS JIT availability probe: {}",
-        initial_jit_available ? "available (process is traced)"
-                              : "unavailable (no debugger attached)");
+        initial_jit_available ? "available for this iOS version"
+                              : "unavailable (enable JIT for this process)");
 
     // Reserve the guest address space FIRST (the 24 JIT mappings fragment it
     // otherwise and mem::init later fails with ENOMEM), then allocate the JIT
@@ -2748,7 +2763,7 @@ int main(int argc, char *argv[]) {
         LOG_CRITICAL("Could not prereserve guest memory at startup; JIT pool prewarm deferred to first boot");
     } else if (initial_jit_available) {
         if (prepare_ios_jit_pool())
-            LOG_INFO("iOS JIT region pool prepared at startup; later StikDebug detach no longer blocks boots");
+            LOG_INFO("iOS JIT preparation complete at startup");
         else
             LOG_WARN("iOS JIT region pool startup preparation failed; will retry at first boot");
     }

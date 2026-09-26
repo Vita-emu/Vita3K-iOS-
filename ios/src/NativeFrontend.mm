@@ -477,16 +477,19 @@ NSString *display_title(NSString *identifier, NSString *original) {
 // is assigned, so handing out a fresh object per call made cell reuse pay for
 // a full effect teardown on every dequeue.
 UIVisualEffect *glass_effect(const BOOL interactive = YES) {
-    static UIGlassEffect *live = nil;
-    static UIGlassEffect *stat = nil;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        live = [UIGlassEffect effectWithStyle:UIGlassEffectStyleRegular];
-        live.interactive = YES;
-        stat = [UIGlassEffect effectWithStyle:UIGlassEffectStyleRegular];
-        stat.interactive = NO;
-    });
-    return interactive ? live : stat;
+    if (@available(iOS 26.0, *)) {
+        static UIGlassEffect *live = nil;
+        static UIGlassEffect *stat = nil;
+        static dispatch_once_t once;
+        dispatch_once(&once, ^{
+            live = [UIGlassEffect effectWithStyle:UIGlassEffectStyleRegular];
+            live.interactive = YES;
+            stat = [UIGlassEffect effectWithStyle:UIGlassEffectStyleRegular];
+            stat.interactive = NO;
+        });
+        return interactive ? live : stat;
+    }
+    return [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemMaterial];
 }
 
 // Whether surfaces drawn over a running game still use Liquid Glass.
@@ -504,10 +507,13 @@ BOOL in_game_liquid_glass_enabled() {
 // banners leave it off so they cost a single composite instead of a live
 // refraction pass.
 UIVisualEffect *glass_effect_tinted(UIColor *tint, const BOOL interactive = NO) {
-    UIGlassEffect *effect = [UIGlassEffect effectWithStyle:UIGlassEffectStyleRegular];
-    effect.interactive = interactive;
-    effect.tintColor = tint;
-    return effect;
+    if (@available(iOS 26.0, *)) {
+        UIGlassEffect *effect = [UIGlassEffect effectWithStyle:UIGlassEffectStyleRegular];
+        effect.interactive = interactive;
+        effect.tintColor = tint;
+        return effect;
+    }
+    return [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemMaterial];
 }
 
 // Liquid Glass shapes use continuous ("squircle") corners, not circular arcs.

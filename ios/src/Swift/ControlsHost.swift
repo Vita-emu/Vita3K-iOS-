@@ -20,7 +20,9 @@ private final class ControlsHostingController<Content: View>: UIHostingControlle
         SafeAreaReporter.topPixels = Float(top * scale)
         // Points, for the editor chrome to clear the notch (the overlay is
         // full-bleed, so SwiftUI's own safe area reads zero there).
-        ControlsModel.shared.topSafeInset = top
+        if ControlsModel.shared.topSafeInset != top {
+            ControlsModel.shared.topSafeInset = top
+        }
     }
 }
 

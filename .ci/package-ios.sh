@@ -54,6 +54,7 @@ plist="$expected_app/Info.plist"
 [[ -f "$plist" ]] || { echo "Missing Info.plist: $plist" >&2; exit 1; }
 
 plutil -lint "$plist"
+python3 "$(dirname "${BASH_SOURCE[0]}")/verify-ios-minimum.py" "$expected_app"
 file "$executable" | grep -q 'arm64' || {
     echo "The app executable is not an arm64 device binary." >&2
     file "$executable" >&2

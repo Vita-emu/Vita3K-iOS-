@@ -22,6 +22,8 @@
     <string>0.47.0</string>
     <key>CFBundleVersion</key>
     <string>470</string>
+    <key>MinimumOSVersion</key>
+    <string>@VITA3K_IOS_DEPLOYMENT_TARGET@</string>
     <key>LSRequiresIPhoneOS</key>
     <true/>
     <key>LSSupportsOpeningDocumentsInPlace</key>

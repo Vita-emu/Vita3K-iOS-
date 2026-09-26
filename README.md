@@ -22,10 +22,14 @@ that you are complying with the laws in your jurisdiction.
 
 ## Requirements
 
-- An iPhone/iPad on a recent iOS version, with a way to sideload an unsigned `.ipa`.
+- An arm64 iPhone/iPad with Metal on **iOS 16.7 or later**, with a way to
+  sign and sideload an unsigned `.ipa`. The compatibility target includes
+  **iPhone 8 Plus on iOS 16.7.16**; game performance and device stability still
+  need physical-device validation. See [iOS 16 compatibility](docs/ios-16-compatibility.md).
 - **JIT** must be enabled for games to run (Tsubomi shows a banner and refuses to boot
   games when JIT is unavailable). [StikDebug](https://github.com/StephenDev0/StikDebug)
-  or a comparable JIT enabler works.
+  or another debugger/JIT enabler compatible with your iOS version is required.
+  Do not assume an iOS 26 JIT tool supports iOS 16.
 - Your own **PS Vita firmware** and **game dumps**.
 
 ## Setup

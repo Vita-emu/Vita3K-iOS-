@@ -23,16 +23,14 @@ struct OnboardingView: View {
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    /// Computed rather than stored: touching a @MainActor singleton from a
-    /// struct's property initializer would be an isolation violation.
-    /// @Observable tracks the reads either way.
-    private var firmware: FirmwareState { FirmwareState.shared }
+    @ObservedObject private var firmware = FirmwareState.shared
+    @ObservedObject private var library = LibraryState.shared
 
     /// The install runs on the emulator thread and reports progress through the
     /// library's busy state. Onboarding covers the library, so that indicator
     /// is not visible from here - without surfacing it, choosing a firmware
     /// file looks like it did nothing at all.
-    private var installProgress: String? { LibraryState.shared.busyMessage }
+    private var installProgress: String? { library.busyMessage }
 
     /// Short phones in landscape get tighter metrics so every page still fits.
     private var isCompact: Bool { verticalSizeClass == .compact }
@@ -121,7 +119,7 @@ struct OnboardingView: View {
                     .foregroundStyle(.tint)
                     // Symbols are how the user perceives the page changing;
                     // a bounce on arrival reads as the step advancing.
-                    .symbolEffect(.bounce, value: pageIndex)
+                    .compatibleBounce(value: pageIndex)
                     .accessibilityHidden(true)
             }
 
@@ -144,7 +142,7 @@ struct OnboardingView: View {
                 Label("Installed", systemImage: "checkmark.circle.fill")
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(.green)
-                    .symbolEffect(.bounce, value: requirementSatisfied)
+                    .compatibleBounce(value: requirementSatisfied)
                     .transition(.scale.combined(with: .opacity))
             }
         }
@@ -154,8 +152,8 @@ struct OnboardingView: View {
             insertion: .move(edge: .trailing).combined(with: .opacity),
             removal: .move(edge: .leading).combined(with: .opacity)
         ))
-        .animation(reduceMotion ? nil : .snappy(duration: 0.3), value: pageIndex)
-        .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: requirementSatisfied)
+        .animation(reduceMotion ? nil : .compatibilitySnappy(duration: 0.3), value: pageIndex)
+        .animation(reduceMotion ? nil : .compatibilitySnappy(duration: 0.25), value: requirementSatisfied)
     }
 
     @ViewBuilder
@@ -174,7 +172,7 @@ struct OnboardingView: View {
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 12)
-                .glassEffect(.regular, in: .capsule)
+                .compatibleGlass(in: Capsule())
                 .transition(.opacity)
             } else if page.requirement != nil {
                 // Before the package is installed, choosing a file is the job.
@@ -186,12 +184,12 @@ struct OnboardingView: View {
                     Button("Choose Firmware File") {
                         Bridge.presentFirmwareImportPicker()
                     }
-                    .buttonStyle(.glass)
+                    .compatibleGlassButton()
                 } else {
                     Button("Choose Firmware File") {
                         Bridge.presentFirmwareImportPicker()
                     }
-                    .buttonStyle(.glassProminent)
+                    .compatibleGlassButton(prominent: true)
                 }
             }
 
@@ -200,24 +198,24 @@ struct OnboardingView: View {
                     Bridge.markOnboardingComplete()
                     onFinish()
                 }
-                .buttonStyle(.glassProminent)
+                .compatibleGlassButton(prominent: true)
                 // The last page still gates on all three packages: a user who
                 // somehow reached it without them must not get into the library.
                 .disabled(!firmware.allPackagesReady)
             } else if page.requirement == nil {
                 // No firmware button on this page, so Next is the primary.
                 Button("Next") { pageIndex += 1 }
-                    .buttonStyle(.glassProminent)
+                    .compatibleGlassButton(prominent: true)
             } else if requirementSatisfied {
                 // The package is in: this is now the only thing left to do.
                 Button("Next") { pageIndex += 1 }
-                    .buttonStyle(.glassProminent)
+                    .compatibleGlassButton(prominent: true)
             } else {
                 // Plain glass and disabled: "Choose Firmware File" above is
                 // the primary until its package is installed, and only one
                 // element per screen should carry the tint.
                 Button("Next") { pageIndex += 1 }
-                    .buttonStyle(.glass)
+                    .compatibleGlassButton()
                     .disabled(true)
             }
 
@@ -225,8 +223,8 @@ struct OnboardingView: View {
         }
         .controlSize(.large)
         .frame(maxWidth: .infinity)
-        .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: requirementSatisfied)
-        .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: installProgress)
+        .animation(reduceMotion ? nil : .compatibilitySnappy(duration: 0.25), value: requirementSatisfied)
+        .animation(reduceMotion ? nil : .compatibilitySnappy(duration: 0.25), value: installProgress)
     }
 
     /// Page indicator. Forward-only, so the dots are a progress readout rather
@@ -241,7 +239,7 @@ struct OnboardingView: View {
             }
         }
         .padding(.top, 4)
-        .animation(reduceMotion ? nil : .snappy(duration: 0.3), value: pageIndex)
+        .animation(reduceMotion ? nil : .compatibilitySnappy(duration: 0.3), value: pageIndex)
         .accessibilityElement()
         .accessibilityLabel("Step \(pageIndex + 1) of \(Self.pages.count)")
     }
