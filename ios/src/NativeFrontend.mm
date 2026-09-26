@@ -1954,3 +1954,11 @@ void vita3k_ios_report_settings_result(const std::vector<std::string> &restart_r
                 [labels componentsJoinedByString:@", "]]];
     });
 }
+
+void vita3k_ios_report_install_progress(int percent) {
+    perform_on_main(^{
+        NSString *message = percent > 100 ? @"Updating game library…"
+            : [NSString stringWithFormat:@"Installing… %d%%", percent];
+        [TsubomiLibraryStateBridge setBusyMessage:message];
+    });
+}
