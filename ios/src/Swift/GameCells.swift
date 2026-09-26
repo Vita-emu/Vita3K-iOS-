@@ -91,13 +91,13 @@ struct GameCover: View {
                 .aspectRatio(contentMode: .fill)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .scaleEffect(wide ? 1.01 : 1)
-                .background(.fill.secondary)
+                .background(Color(uiColor: .secondarySystemFill))
         } else {
             Image(systemName: "gamecontroller.fill")
                 .font(.largeTitle)
                 .foregroundStyle(.pink)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(.fill.secondary)
+                .background(Color(uiColor: .secondarySystemFill))
         }
     }
 }
