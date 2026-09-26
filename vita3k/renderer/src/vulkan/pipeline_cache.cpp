@@ -23,8 +23,8 @@
 
 #include <gxm/functions.h>
 #include <gxm/types.h>
-#include <renderer/shaders.h>
 #include <renderer/cache_validation.h>
+#include <renderer/shaders.h>
 #include <shader/spirv_recompiler.h>
 
 #include <util/fs.h>
