@@ -43,7 +43,13 @@ struct YUVConversionCache {
 };
 
 enum class Backend : uint32_t;
+#if defined(VITA3K_PLATFORM_IOS)
+// Bound retained GPU textures on devices with a tight per-process memory limit.
+// Replacements still use the Vulkan frame destruction queue for in-flight work.
+static constexpr size_t TextureCacheSize = 512;
+#else
 static constexpr size_t TextureCacheSize = 1024;
+#endif
 
 typedef std::array<uint32_t, 4> TextureGxmDataRepr;
 struct TextureCacheInfo {
