@@ -19,6 +19,7 @@
 
 #include <ime/types.h>
 
+#include <cstdint>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -43,6 +44,7 @@ struct Ime {
     ImeLangState lang;
     std::mutex mutex;
 
+    std::uint64_t session_id = 0; // Monotonic across opens, including dialog IME.
     bool state = false;
     SceImeEditText edit_text;
     SceImeParam param;

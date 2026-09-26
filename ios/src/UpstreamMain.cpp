@@ -66,6 +66,10 @@
 #include <unistd.h>
 
 #include <vita3k_ios/NativeFrontend.h>
+#include <vita3k_ios/TextInput.h>
+#include <ime/state.h>
+#include <dialog/state.h>
+#include <pthread.h>
 #include <vita3k_ios/VirtualController.h>
 
 #include <algorithm>
@@ -743,11 +747,17 @@ Vita3KIOSSettings native_settings(EmuEnvState &emuenv) {
     };
 }
 
+std::vector<Vita3KIOSGameEntry> native_games(EmuEnvState &emuenv);
+
 struct ImportJob {
     std::atomic_bool done{ false };
     bool firmware = false;
     bool success = false;
     bool rescan_apps = true;
+    bool apps_rescanned = false;
+    std::optional<std::vector<Vita3KIOSGameEntry>> games_snapshot;
+    std::atomic<int> progress{-1};
+    int displayed_progress = -1;
     // Set for a successful save import: trophy/playtime data on disk changed
     // but the installed-apps list itself didn't, so this asks for the light
     // native_games()+vita3k_ios_update_library() refresh instead of a full
@@ -2065,6 +2075,7 @@ void start_import(EmuEnvState &emuenv, const std::string &path, const bool firmw
     g_import_job = job;
     // Installs take minutes for a PUP; never block the SDL/UIKit thread.
     std::thread([job, path, &emuenv] {
+        pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
         try {
             if (job->firmware) {
                 const std::string version = install_pup(emuenv.vita_fs_path, fs::path(path), nullptr);
@@ -2081,7 +2092,9 @@ void start_import(EmuEnvState &emuenv, const std::string &path, const bool firmw
                 if (zrif.empty()) {
                     job->message = "PKG needs a matching license. Import its work.bin first, then select the .pkg again.";
                 } else {
-                    job->success = install_pkg(fs::path(path), emuenv, zrif, [](float) {});
+                    job->success = install_pkg(fs::path(path), emuenv, zrif, [job](float percent) {
+                        job->progress.store(std::clamp(static_cast<int>(percent), 0, 100));
+                    });
                     job->message = job->success ? "PKG installed" : "PKG install failed (see tsubomi.log)";
                 }
             } else {
@@ -2097,6 +2110,20 @@ void start_import(EmuEnvState &emuenv, const std::string &path, const bool firmw
             }
         } catch (const std::exception &error) {
             job->message = std::string("Import failed: ") + error.what();
+        }
+        if (job->success && !job->firmware) {
+            job->progress.store(101);
+            try {
+                // Force fresh metadata after PKG/ZIP mutation, on this worker.
+                // The UIKit loop only publishes the finished snapshot.
+                job->apps_rescanned = app::scan_apps(emuenv);
+                if (job->apps_rescanned)
+                    job->games_snapshot = native_games(emuenv);
+                if (!job->apps_rescanned)
+                    job->message += " (library scan failed; pull to refresh)";
+            } catch (const std::exception &error) {
+                LOG_ERROR("Post-install scan failed: {}", error.what());
+            }
         }
         boost::system::error_code cleanup_error;
         fs::remove(fs::path(path), cleanup_error);
@@ -2347,8 +2374,17 @@ std::optional<AppLaunchRequest> choose_boot_title(EmuEnvState &emuenv) {
                 LOG_INFO("Ignoring quit-type SDL event {} while the library is on screen", event.type);
         }
 
+        if (g_import_job && !g_import_job->done.load()) {
+            const int progress = g_import_job->progress.load();
+            if (progress >= 0 && progress != g_import_job->displayed_progress) {
+                g_import_job->displayed_progress = progress;
+                vita3k_ios_report_install_progress(progress);
+            }
+        }
         if (g_import_job && g_import_job->done.load()) {
             const bool was_firmware = g_import_job->firmware;
+            const bool apps_rescanned = g_import_job->apps_rescanned;
+            auto games_snapshot = std::move(g_import_job->games_snapshot);
             const bool rescan_apps = g_import_job->rescan_apps;
             const bool refresh_library = g_import_job->refresh_library;
             const bool success = g_import_job->success;
@@ -2357,10 +2393,10 @@ std::optional<AppLaunchRequest> choose_boot_title(EmuEnvState &emuenv) {
             const std::string share_path = g_import_job->share_path;
             const auto installed_applications = g_import_job->installed_applications;
             g_import_job.reset();
-            if (rescan_apps && !was_firmware && !app::init_apps_list(emuenv))
+            if (rescan_apps && !was_firmware && !apps_rescanned && !app::scan_apps(emuenv))
                 LOG_ERROR("Failed to rescan apps list after import.");
             if (rescan_apps || (success && refresh_library)) {
-                games = native_games(emuenv);
+                games = games_snapshot ? std::move(*games_snapshot) : native_games(emuenv);
                 vita3k_ios_update_library(games, native_settings(emuenv));
             }
             vita3k_ios_report_import_result(message, success, needs_attention);
@@ -2651,6 +2687,77 @@ bool has_physical_controller(CtrlState &state) {
         return name == nullptr || std::string_view(name) != "Vita3K iOS Touch Controller";
     });
 }
+
+// Poll native text input without blocking the UIKit loop on guest callbacks.
+// Results carry the IME generation so a late button tap cannot edit a new dialog.
+class IOSInputSession {
+    std::uint64_t completed_id = 0;
+    std::uint64_t pending_enter_id = 0;
+public:
+    void update(EmuEnvState &emuenv) {
+        auto &dialog = emuenv.common_dialog;
+        auto &ime = emuenv.ime;
+        std::unique_lock dialog_lock(dialog.mutex, std::try_to_lock);
+        if (!dialog_lock.owns_lock())
+            return;
+        std::unique_lock ime_lock(ime.mutex, std::try_to_lock);
+        if (!ime_lock.owns_lock())
+            return;
+        const bool dialog_active = dialog.type == IME_DIALOG
+            && dialog.status == SCE_COMMON_DIALOG_STATUS_RUNNING;
+        const bool active = dialog_active || ime.state;
+        const auto id = ime.session_id;
+        if (pending_enter_id && pending_enter_id == id && ime.state
+            && ime.event_id == SCE_IME_EVENT_OPEN) {
+            ime.event_id = SCE_IME_EVENT_PRESS_ENTER;
+            pending_enter_id = 0;
+        } else if (!active || pending_enter_id != id) {
+            pending_enter_id = 0;
+        }
+        if (auto result = vita3k_ios_take_text_result(); result && active
+            && result->id == id && completed_id != id) {
+            if (!result->cancelled || !dialog_active || dialog.ime.cancelable) {
+                const size_t maximum = std::min<size_t>(dialog_active ? dialog.ime.max_length
+                    : ime.param.maxTextLength, SCE_IME_MAX_TEXT_LENGTH);
+                vita3k_ios_limit_text(result->text, maximum);
+                if (!result->cancelled) {
+                    ime.str = result->text;
+                    ime.caretIndex = static_cast<uint32_t>(ime.str.size());
+                    ime.edit_text.caretIndex = ime.caretIndex;
+                    ime.edit_text.preeditIndex = ime.caretIndex;
+                    ime.edit_text.preeditLength = 0;
+                    ime.edit_text.editIndex = 0;
+                }
+                if (dialog_active) {
+                    if (!result->cancelled && dialog.ime.result) {
+                        std::copy(ime.str.begin(), ime.str.end(), dialog.ime.result);
+                        dialog.ime.result[ime.str.size()] = 0;
+                    }
+                    dialog.ime.status = result->cancelled ? SCE_IME_DIALOG_BUTTON_CLOSE : SCE_IME_DIALOG_BUTTON_ENTER;
+                    dialog.result = result->cancelled ? SCE_COMMON_DIALOG_RESULT_USER_CANCELED : SCE_COMMON_DIALOG_RESULT_OK;
+                    dialog.status = SCE_COMMON_DIALOG_STATUS_FINISHED;
+                } else {
+                    // Deliver the new text before Enter so callback consumers
+                    // see the edit even if they treat Enter as a close request.
+                    ime.event_id = result->cancelled ? SCE_IME_EVENT_PRESS_CLOSE : SCE_IME_EVENT_UPDATE_TEXT;
+                    pending_enter_id = result->cancelled ? 0 : id;
+                }
+                completed_id = id;
+            }
+        }
+        std::optional<Vita3KIOSTextRequest> request;
+        if (active && completed_id != id) {
+            request = Vita3KIOSTextRequest{
+                id, dialog_active ? dialog.ime.title : "Enter text", ime.str,
+                std::min<size_t>(dialog_active ? dialog.ime.max_length : ime.param.maxTextLength, SCE_IME_MAX_TEXT_LENGTH),
+                dialog_active && dialog.ime.multiline, !dialog_active || dialog.ime.cancelable};
+            vita3k_ios_limit_text(request->text, request->maximum);
+        }
+        ime_lock.unlock();
+        dialog_lock.unlock();
+        vita3k_ios_update_text_input(request);
+    }
+};
 
 // Gravity Rush runs ~24 concurrently-live guest threads; exited-but-undeleted
 // threads now release their region when they park dormant, but keep headroom
@@ -2966,6 +3073,7 @@ int main(int argc, char *argv[]) {
     std::size_t perf_last_frame_count = emuenv->frame_count;
     Uint64 playtime_checkpoint_ms = perf_last_ms;
 
+    IOSInputSession text_input;
     bool running = true;
     while (running) {
         SDL_Event event;
@@ -3092,12 +3200,16 @@ int main(int argc, char *argv[]) {
         if (!session_controller.is_running())
             running = false;
 
+        text_input.update(*emuenv);
+
         // Service UIKit (virtual controller, in-game glass menu, perf overlay)
         // instead of a blind sleep so touch controls stay responsive.
         if (running)
             vita3k_ios_pump_runloop(0.016);
     }
 
+    vita3k_ios_update_text_input(std::nullopt);
+    vita3k_ios_take_text_result();
     LOG_INFO("Shutting down game");
     stop_guest_watchdog.store(true, std::memory_order_relaxed);
     guest_watchdog.join();

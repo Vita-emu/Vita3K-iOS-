@@ -149,3 +149,39 @@ These tests cover packaging policy using synthetic vtool output and mocked
 Apple tools. They do not compile Swift/Objective-C++, validate a real IPA,
 or establish device compatibility. Xcode build and physical-device checks
 remain required before publishing a release as tested on iPhone 8 Plus.
+
+## Jetsam, installs, text entry and interrupted caches
+
+The supplied iPhone 8 Plus Jetsam report identifies `per-process-limit` at
+about 2098 MiB resident (134271 pages of 16 KiB). This identifies a memory kill,
+not which allocator caused it. This build reduces iOS retained texture slots
+from 1024 to 512; GPU replacements continue to use the existing frame-delayed
+destruction queue. This is an entry bound, not a byte cap or a bypass of iOS's
+process limit. Some games may still exceed the available memory.
+
+PKG/ZIP imports run at utility QoS. After installation the same worker forces
+an app scan and builds the library snapshot, including recursive size counts
+and trophies, before notifying the UIKit thread. PKG stages now show progress;
+ZIP decompression remains streamed. The library should update without an app
+switch, but this requires a device test with the affected package.
+
+The native text editor supports both Vita IME dialogs and callback-based IME,
+including Done, optional Cancel, multiline text and UTF-16 length limits.
+Results are checked against the current IME generation; stale sheets cannot
+write into a later request. Callback-based IME delivers text before Enter and
+releases its lock before invoking guest callbacks (which may close the IME).
+The guest UTF-16 work buffer is now allocated in bytes for 16-bit characters.
+
+Cached SPIR-V is read with size/alignment/instruction-length checks; invalid
+files regenerate instead of being passed to the GPU. Pipeline cache reads
+check hash-count bounds and complete reads. On iOS, files over 64 MiB are
+ignored to avoid an unbounded startup allocation. Pipeline cache saves write
+a temporary file then rename it, preserving the previous file on write failure
+or forced termination during the write. These changes address cache integrity;
+they do not establish the cause of any particular game's graphical glitches.
+
+Device checks still required: install a large PKG and ZIP without backgrounding,
+confirm the library updates, type/save a name (including Thai or emoji), cancel
+and reopen a dialog, quit while the keyboard is open, and compare memory and
+textures in the affected game across a full app restart. Record title IDs,
+settings, `tsubomi.log`, and screenshots for any remaining graphics problem.

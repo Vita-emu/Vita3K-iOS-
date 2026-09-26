@@ -16,6 +16,7 @@
 // 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
 #include <renderer/shaders.h>
+#include <renderer/cache_validation.h>
 
 #include <renderer/vulkan/state.h>
 
@@ -115,28 +116,6 @@ void save_shaders_cache_hashs(State &renderer, std::vector<ShadersHash> &shaders
     }
 }
 
-static bool load_shader(const fs::path &shader_name, char **destination, std::size_t &size_read) {
-    fs::ifstream is(shader_name, fs::ifstream::binary);
-    if (!is) {
-        return false;
-    }
-
-    is.seekg(0, fs::ifstream::end);
-    size_read = is.tellg();
-    is.seekg(0);
-
-    if (size_read == 0) {
-        return false;
-    }
-
-    if (destination == nullptr) {
-        return true;
-    }
-
-    is.read(*destination, size_read);
-    return true;
-}
-
 static Sha256Hash get_shader_hash(const SceGxmProgram &program) {
     const Sha256Hash hash_bytes = sha256(&program, program.size);
     return hash_bytes;
@@ -144,16 +123,21 @@ static Sha256Hash get_shader_hash(const SceGxmProgram &program) {
 
 template <typename R>
 static R load_shader_generic(const fs::path &shader_path) {
-    std::size_t read_size = 0;
-    R source;
-
-    if (load_shader(shader_path, nullptr, read_size)) {
-        source.resize((read_size + sizeof(typename R::value_type) - 1) / sizeof(typename R::value_type));
-
-        char *dest_pointer = reinterpret_cast<char *>(source.data());
-        load_shader(shader_path, &dest_pointer, read_size);
-    }
-
+    fs::ifstream input(shader_path, std::ios::binary | std::ios::ate);
+    if (!input)
+        return {};
+    const auto length = input.tellg();
+    // A truncated/oversized cache should be regenerated, not padded with zeros
+    // or allowed to allocate an unbounded buffer at the next launch.
+    if (length <= 0 || length > 32 * 1024 * 1024)
+        return {};
+    const std::size_t size = static_cast<std::size_t>(length);
+    if (size % sizeof(typename R::value_type) != 0)
+        return {};
+    R source(size / sizeof(typename R::value_type), {});
+    input.seekg(0);
+    if (!input.read(reinterpret_cast<char *>(source.data()), size))
+        return {};
     return source;
 }
 
@@ -178,7 +162,7 @@ static shader::GeneratedShader load_shader_generic(shader::Target target, const 
             }
         } else {
             std::vector<uint32_t> source = load_shader_generic<std::vector<uint32_t>>(get_shader_path("spv"));
-            if (!source.empty())
+            if (valid_spirv_cache(source))
                 return { "", source };
         }
     }

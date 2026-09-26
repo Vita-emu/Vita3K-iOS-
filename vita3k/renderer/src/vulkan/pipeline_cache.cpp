@@ -24,6 +24,7 @@
 #include <gxm/functions.h>
 #include <gxm/types.h>
 #include <renderer/shaders.h>
+#include <renderer/cache_validation.h>
 #include <shader/spirv_recompiler.h>
 
 #include <util/fs.h>
@@ -298,7 +299,15 @@ void PipelineCache::read_pipeline_cache() {
     LOG_INFO("Found pipeline cache, reading...");
 
     pipeline_cache_file.seekg(0, fs::ifstream::end);
-    size_t pipeline_size = pipeline_cache_file.tellg();
+    const auto file_length = pipeline_cache_file.tellg();
+    // Ignore pathological caches instead of creating a large startup spike.
+    if (file_length < 0)
+        return;
+#if defined(VITA3K_PLATFORM_IOS)
+    if (file_length > 64 * 1024 * 1024)
+        return;
+#endif
+    size_t pipeline_size = static_cast<size_t>(file_length);
     pipeline_cache_file.seekg(0);
 
     if (pipeline_size < sizeof(uint32_t) + sizeof(size_t))
@@ -308,28 +317,34 @@ void PipelineCache::read_pipeline_cache() {
     auto read_integer = [&]<typename T>(T &val) {
         pipeline_cache_file.read(reinterpret_cast<char *>(&val), sizeof(T));
     };
-    uint32_t magic_number;
+    uint32_t magic_number = 0;
     read_integer(magic_number);
-    size_t nb_hashes;
+    size_t nb_hashes = 0;
     read_integer(nb_hashes);
     // safety check
-    size_t hashes_size = sizeof(magic_number) + sizeof(nb_hashes) + nb_hashes * sizeof(uint64_t);
-    if (magic_number != pipeline_cache_magic || pipeline_size < hashes_size) {
+    if (!pipeline_cache_file || magic_number != pipeline_cache_magic
+        || !valid_pipeline_hash_count(pipeline_size, nb_hashes)) {
         LOG_WARN("Pipeline cache is corrupted, ignoring it.");
         pipeline_cache_file.close();
         return;
     }
-    pipeline_size -= hashes_size;
+    pipeline_size -= sizeof(magic_number) + sizeof(nb_hashes) + nb_hashes * sizeof(uint64_t);
+    if (pipeline_size < 32)
+        return; // Vulkan pipeline cache header is at least 32 bytes.
 
-    // insert hashes with null pipeline
+    std::vector<uint64_t> hashes;
+    hashes.reserve(nb_hashes);
     for (size_t i = 0; i < nb_hashes; i++) {
-        uint64_t hash;
+        uint64_t hash = 0;
         read_integer(hash);
-        pipelines[hash] = nullptr;
+        if (!pipeline_cache_file)
+            return;
+        hashes.push_back(hash);
     }
 
     std::vector<char> pipeline_data(pipeline_size);
-    pipeline_cache_file.read(pipeline_data.data(), pipeline_size);
+    if (!pipeline_cache_file.read(pipeline_data.data(), pipeline_size))
+        return;
     pipeline_cache_file.close();
 
     vk::PipelineCacheCreateInfo cache_info{
@@ -337,9 +352,16 @@ void PipelineCache::read_pipeline_cache() {
         .pInitialData = pipeline_data.data()
     };
 
-    state.device.destroyPipelineCache(pipeline_cache);
-    pipeline_cache = state.device.createPipelineCache(cache_info);
-    LOG_INFO("Pipeline cache read and loaded");
+    try {
+        const auto loaded = state.device.createPipelineCache(cache_info);
+        state.device.destroyPipelineCache(pipeline_cache);
+        pipeline_cache = loaded;
+        for (const auto hash : hashes)
+            pipelines[hash] = nullptr;
+        LOG_INFO("Pipeline cache read and loaded");
+    } catch (const vk::SystemError &error) {
+        LOG_WARN("Ignoring rejected pipeline cache: {}", error.what());
+    }
 }
 
 void PipelineCache::save_pipeline_cache() {
@@ -360,7 +382,8 @@ void PipelineCache::save_pipeline_cache() {
     const std::string pipeline_cache_name = fmt::format("pipeline-cache-vk{}.dat", shader::CURRENT_VERSION);
     const fs::path path = state.shaders_path / pipeline_cache_name;
 
-    fs::ofstream pipeline_cache_file(path, std::ios::out | std::ios::binary | std::ios::trunc);
+    const fs::path temporary_path = fs_utils::path_concat(path, ".tmp");
+    fs::ofstream pipeline_cache_file(temporary_path, std::ios::out | std::ios::binary | std::ios::trunc);
     if (!pipeline_cache_file.is_open())
         return;
 
@@ -379,6 +402,14 @@ void PipelineCache::save_pipeline_cache() {
     // then save the cache
     pipeline_cache_file.write(reinterpret_cast<const char *>(pipeline_data.data()), pipeline_data.size());
     pipeline_cache_file.close();
+    boost::system::error_code error;
+    if (pipeline_cache_file)
+        fs::rename(temporary_path, path, error);
+    if (!pipeline_cache_file || error) {
+        LOG_WARN("Could not publish pipeline cache; keeping previous file");
+        fs::remove(temporary_path, error);
+        return;
+    }
     LOG_INFO("Pipeline cache saved");
 }
 

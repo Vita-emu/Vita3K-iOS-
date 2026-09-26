@@ -234,6 +234,7 @@ EXPORT(int, sceImeDialogInit, const Ptr<SceImeDialogParam> param) {
     // shared ime struct so ime funcs can work for ime_dialog
     {
         std::lock_guard lock2(emuenv.ime.mutex);
+        ++emuenv.ime.session_id;
         emuenv.ime.str = text;
         emuenv.ime.caretIndex = static_cast<uint32_t>(text.size());
         emuenv.ime.edit_text = {};
