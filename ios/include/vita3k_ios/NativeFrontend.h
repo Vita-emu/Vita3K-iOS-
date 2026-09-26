@@ -214,3 +214,6 @@ void vita3k_ios_show_boot_error(const std::string &message);
 // log overlay: cheap to poll (a small in-memory ring buffer, no file IO), so
 // the frontend can call it every frame or two while the overlay is visible.
 std::vector<std::string> vita3k_ios_recent_log_lines();
+
+// Progress snapshots are polled by the library loop, never per-file UI callbacks.
+void vita3k_ios_report_install_progress(int percent);
