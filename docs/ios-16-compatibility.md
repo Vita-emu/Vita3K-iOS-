@@ -57,12 +57,42 @@ Use a fresh build directory after changing deployment or vcpkg triplets. CI
 includes triplet contents in its dependency cache key. The packaging check caps
 the minimum at 16.7 so accidentally building only for a newer OS fails CI.
 
+## Firmware setup and TrollStore Lite
+
+Onboarding now requires **PSVUPDAT.PUP (main firmware)** followed by the
+**PSP2UPDAT.PUP font package**. Readiness comes from the installed `vs0` and
+`sa0` content. A separate pre-install package (`pd0`) is optional, matching the
+desktop firmware check. Existing installed content is reused when reopening
+onboarding; you do not need to delete the app or install the main PUP again.
+The final button and game import/launch still require both main firmware and
+fonts. Import results are also visible on the firmware page.
+
+On iOS 16, tap **Enable JIT** in the library, then **TrollStore Lite / TrollStore**.
+This opens the official `apple-magnifier://enable-jit?bundle-id=...` handler
+using the installed app's actual bundle ID. Return to Tsubomi after enabling
+JIT; its periodic capability check clears the banner. Opening the helper alone
+does not mark JIT as active. If Apple's Magnifier opens instead, check that
+TrollStore's URL Scheme setting is enabled. The helper must support your
+jailbreak/iOS setup and have installed this app. No signing entitlement or
+jailbreak is installed by this button.
+
+The older-iOS probe also accepts a successful anonymous RWX mapping, matching
+the emulator's code allocator, so an existing jailbreak capability does not
+require a debugger flag. A rejected mapping leaves games blocked. iOS 26 keeps
+its existing StikDebug handshake and does not use this mapping fallback.
+
+Protocol references: [TrollStore URL scheme](https://github.com/opa334/TrollStore#url-scheme),
+[Lite URL registration](https://github.com/opa334/TrollStore/blob/main/TrollStoreLite/Resources/Info.plist),
+and [shared JIT handler](https://github.com/opa334/TrollStore/blob/main/TrollStore/TSSceneDelegate.m).
+
 ## iPhone 8 Plus validation still required
 
 1. Sign/install on iOS 16.7.16 and open the app without JIT. Onboarding, settings,
    and the library must open; a game launch must report missing JIT.
-2. Import your own firmware packages. Verify progress updates and completion
-   gates without reopening the app. Import your own game and license as needed.
+2. Import main firmware alone: Next must enable and lead to the font page.
+   Import fonts: Get Started must become available even without `pd0`. Test
+   fonts-first, a rejected PUP, and restart with existing installed content.
+   Import your own game and license as needed.
 3. Enable JIT using a debugger/enabler that supports your exact iOS version and
    signing setup. Verify the banner clears. On iOS 16, capability may persist
    after debugger detachment; the iOS 26 pool handshake must never run.

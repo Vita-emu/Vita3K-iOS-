@@ -16,7 +16,7 @@ final class LibraryState: ObservableObject {
     /// All three official packages are installed. Games cannot boot otherwise
     /// and are dimmed in the list.
     @Published private(set) var firmwareReady = false
-    /// A JIT-enabling debugger is attached. Games cannot boot without it.
+    /// The process has JIT capability. Games cannot boot without it.
     @Published private(set) var jitAvailable = true
 
     /// Bumped whenever cached cover art may be stale.

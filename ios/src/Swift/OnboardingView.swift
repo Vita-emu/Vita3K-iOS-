@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Mandatory first-run flow: six forward-only pages, three of which gate on an
+/// Mandatory first-run flow: five forward-only pages, two of which gate on an
 /// official firmware package actually being installed.
 ///
 /// The UIKit version carried ~250 lines of constraint work to keep the card
@@ -51,25 +51,17 @@ struct OnboardingView: View {
                 """,
             requirement: nil
         ),
-        // Titles name what the user is installing rather than the filename;
-        // the hint still says which file to pick.
         Page(
-            symbol: "shippingbox",
-            title: "Install Pre-Install Firmware",
-            body: "Choose the official pre-install firmware PUP.",
-            requirement: .preinstalled
+            symbol: "gearshape.2",
+            title: "Install Firmware",
+            body: "Choose the official PSVUPDAT.PUP. After installation, tap Next to install the fonts.",
+            requirement: .mainFirmware
         ),
         Page(
             symbol: "textformat",
             title: "Install Font Firmware",
-            body: "Choose the official font package PUP.",
+            body: "Choose the official font package PSP2UPDAT.PUP. It is separate from PSVUPDAT.PUP.",
             requirement: .fontPackage
-        ),
-        Page(
-            symbol: "gearshape.2",
-            title: "Install Firmware",
-            body: "Choose the official PSVUPDAT.PUP. This installs the main Vita system firmware.",
-            requirement: .mainFirmware
         ),
         Page(
             symbol: "flask",
@@ -138,6 +130,13 @@ struct OnboardingView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
+            if page.requirement != nil, let status = library.statusMessage {
+                Text(status)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+
             if page.requirement != nil && requirementSatisfied {
                 Label("Installed", systemImage: "checkmark.circle.fill")
                     .font(.subheadline.weight(.medium))
@@ -199,9 +198,9 @@ struct OnboardingView: View {
                     onFinish()
                 }
                 .compatibleGlassButton(prominent: true)
-                // The last page still gates on all three packages: a user who
+                // The last page still gates on both required packages: a user who
                 // somehow reached it without them must not get into the library.
-                .disabled(!firmware.allPackagesReady)
+                .disabled(!firmware.allPackagesReady || installProgress != nil)
             } else if page.requirement == nil {
                 // No firmware button on this page, so Next is the primary.
                 Button("Next") { pageIndex += 1 }
@@ -210,6 +209,7 @@ struct OnboardingView: View {
                 // The package is in: this is now the only thing left to do.
                 Button("Next") { pageIndex += 1 }
                     .compatibleGlassButton(prominent: true)
+                    .disabled(installProgress != nil)
             } else {
                 // Plain glass and disabled: "Choose Firmware File" above is
                 // the primary until its package is installed, and only one
@@ -255,7 +255,6 @@ struct OnboardingView: View {
     }
 
     private enum FirmwareRequirement {
-        case preinstalled
         case fontPackage
         case mainFirmware
 
@@ -264,7 +263,6 @@ struct OnboardingView: View {
         @MainActor
         func isSatisfied(by state: FirmwareState) -> Bool {
             switch self {
-            case .preinstalled: return state.preinstalledReady
             case .fontPackage: return state.fontPackageReady
             case .mainFirmware: return state.mainFirmwareReady
             }

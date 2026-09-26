@@ -14,7 +14,7 @@ final class FirmwareState: ObservableObject {
     @Published private(set) var preinstalledReady = false
     @Published private(set) var fontPackageReady = false
     @Published private(set) var mainFirmwareReady = false
-    /// All three official packages have populated their partitions. Games stay
+    /// The main firmware and font package have populated their partitions. Games stay
     /// unavailable until this is true.
     @Published private(set) var allPackagesReady = false
 

@@ -542,10 +542,12 @@ private struct LibraryJITBanner: View {
     var body: some View {
         Group {
             if !library.jitAvailable {
-                Label(
-                    "JIT not active",
-                    systemImage: "exclamationmark.triangle.fill"
-                )
+                Button {
+                    Bridge.presentJITRequiredAlert()
+                } label: {
+                    Label("Enable JIT", systemImage: "exclamationmark.triangle.fill")
+                }
+                .buttonStyle(.plain)
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(.black)
                 .padding(.horizontal, 12)

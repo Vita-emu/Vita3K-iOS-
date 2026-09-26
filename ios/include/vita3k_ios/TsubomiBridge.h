@@ -169,7 +169,7 @@ NS_SWIFT_NAME(Bridge)
 #pragma mark - Library actions
 
 /// Boot a title. The caller is responsible for having checked that firmware is
-/// installed and JIT is attached; the library gates on both.
+/// installed and JIT is available; the library gates on both.
 + (void)launchTitle:(NSString *)titleID NS_SWIFT_NAME(launch(titleID:));
 
 /// Ask the core to rescan installed titles.
@@ -214,7 +214,7 @@ NS_SWIFT_NAME(Bridge)
 /// Shows the graphics-help explainer from the library header.
 + (void)presentGraphicsHelp;
 
-/// Explains that a JIT-enabling debugger must be attached before a game can
+/// Offers a compatible JIT enabler before a game can
 /// boot. Shown instead of launching when JIT is unavailable.
 + (void)presentJITRequiredAlert;
 

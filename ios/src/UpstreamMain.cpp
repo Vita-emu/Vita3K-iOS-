@@ -62,6 +62,7 @@
 #include <execinfo.h>
 #include <os/proc.h>
 #include <sys/sysctl.h>
+#include <sys/mman.h>
 #include <unistd.h>
 
 #include <vita3k_ios/NativeFrontend.h>
@@ -379,9 +380,26 @@ bool ios_debugger_attached() {
 
 bool ios_jit_capability_enabled() {
     uint32_t cs_flags = 0;
-    return (csops(getpid(), CS_OPS_STATUS, &cs_flags, sizeof(cs_flags)) == 0
-               && (cs_flags & CS_DEBUGGED) != 0)
-        || ios_debugger_attached();
+    if ((csops(getpid(), CS_OPS_STATUS, &cs_flags, sizeof(cs_flags)) == 0
+            && (cs_flags & CS_DEBUGGED) != 0) || ios_debugger_attached())
+        return true;
+
+    if (__builtin_available(iOS 26.0, *))
+        return false; // Universal JIT still needs its debugger handshake.
+
+    // TrollStore Lite / jailbreak signing can permit executable memory without
+    // CS_DEBUGGED. Probe the same mapping Oaknut uses instead of assuming that
+    // an installed helper or entitlement means JIT is available. A failed probe
+    // is retried by the normal library poll after the user enables JIT.
+    const long page_size = sysconf(_SC_PAGESIZE);
+    if (page_size <= 0)
+        return false;
+    void *region = mmap(nullptr, static_cast<size_t>(page_size),
+        PROT_READ | PROT_WRITE | PROT_EXEC, MAP_ANON | MAP_PRIVATE, -1, 0);
+    if (region == MAP_FAILED)
+        return false;
+    munmap(region, static_cast<size_t>(page_size));
+    return true;
 }
 
 // iOS 26 universal JIT needs the debugger attached while the permanent RX/RW
@@ -681,7 +699,7 @@ std::string firmware_version_display(EmuEnvState &emuenv) {
 
 bool firmware_setup_complete(const EmuEnvState &emuenv) {
     const auto state = app::get_firmware_state(emuenv);
-    return state.font_package && state.preinstalled_package && state.main_firmware;
+    return state.font_package && state.main_firmware;
 }
 
 Vita3KIOSSettings native_settings(EmuEnvState &emuenv) {
@@ -689,9 +707,7 @@ Vita3KIOSSettings native_settings(EmuEnvState &emuenv) {
     const auto firmware = app::get_firmware_state(emuenv);
     std::vector<std::string> missing;
     if (!firmware.font_package)
-        missing.emplace_back("FONTPKG.PUP");
-    if (!firmware.preinstalled_package)
-        missing.emplace_back("PREINSTALL.PUP");
+        missing.emplace_back("PSP2UPDAT.PUP (fonts)");
     if (!firmware.main_firmware)
         missing.emplace_back("PSVUPDAT.PUP");
     std::string missing_text;
@@ -2037,7 +2053,7 @@ void start_library_archive_import(EmuEnvState &emuenv,
 void start_import(EmuEnvState &emuenv, const std::string &path, const bool firmware) {
     if (!firmware && !firmware_setup_complete(emuenv)) {
         vita3k_ios_report_import_result(
-            "Install FONTPKG.PUP, PREINSTALL.PUP, and PSVUPDAT.PUP before importing games", false);
+            "Install PSVUPDAT.PUP and the PSP2UPDAT.PUP font package before importing games", false);
         return;
     }
     if (g_import_job && !g_import_job->done.load()) {
@@ -2359,14 +2375,14 @@ std::optional<AppLaunchRequest> choose_boot_title(EmuEnvState &emuenv) {
             case Vita3KIOSFrontendActionKind::Launch:
                 if (!firmware_setup_complete(emuenv)) {
                     vita3k_ios_show_boot_error(
-                        "Install FONTPKG.PUP, PREINSTALL.PUP, and PSVUPDAT.PUP before playing games.");
+                        "Install PSVUPDAT.PUP and the PSP2UPDAT.PUP font package before playing games.");
                     break;
                 }
                 // Defense in depth: the library already refuses launches without
                 // JIT, but re-probe here so a debugger attached after the probe
                 // is honored and one attached-then-detached is caught.
                 if (!ios_jit_available()) {
-                    LOG_WARN("Refusing launch of '{}': JIT is not available (no debugger attached).",
+                    LOG_WARN("Refusing launch of '{}': JIT is not available for this process.",
                         action->app_path);
                     vita3k_ios_set_jit_available(false);
                     break;
@@ -2818,7 +2834,7 @@ int main(int argc, char *argv[]) {
             SDL_Log("Vita3K iOS: initialize_runtime (kernel/CPU - requires JIT)");
             if (!session_controller.initialize_runtime()) {
                 boot_error = "Could not initialise the emulator runtime or reserve guest memory. "
-                             "Restart Tsubomi, re-enable JIT in StikDebug, and try again.";
+                             "Restart Tsubomi, re-enable JIT with your compatible enabler, and try again.";
             } else {
                 // Prepare every JIT mapping the session is expected to need
                 // while StikDebug is known to be attached. iOS 26 keeps these

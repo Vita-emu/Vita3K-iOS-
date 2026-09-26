@@ -89,8 +89,8 @@ struct Vita3KIOSSettings {
     int bind_triangle = 3;
     // Display-only: installed firmware version shown on the library header.
     std::string firmware_version;
-    // Games stay unavailable until all three official firmware packages have
-    // populated their canonical partitions (pd0, vs0, and sa0).
+    // Games stay unavailable until the main firmware and font package have
+    // populated their canonical partitions (vs0 and sa0).
     bool firmware_ready = false;
     bool font_package_ready = false;
     bool preinstalled_package_ready = false;
@@ -158,9 +158,9 @@ void vita3k_ios_set_log_file_path(const std::string &path);
 void vita3k_ios_share_log_file();
 void vita3k_ios_request_current_trophies();
 
-// Tells the library whether a JIT-enabling debugger is attached. When false,
+// Tells the library whether this process has JIT capability. When false,
 // the library shows a persistent banner and refuses to launch games (guest
-// execution needs writable-executable memory that only JIT provides).
+// execution needs writable-executable memory that JIT permission provides).
 void vita3k_ios_set_jit_available(bool available);
 
 // Prompts the user to import a NoNpDrm work.bin license for a freshly

@@ -823,7 +823,7 @@ bool firmware_ready_or_alert() {
         ?: @"required firmware";
     present_alert(@"Complete firmware setup",
         [NSString stringWithFormat:
-            @"Install all three firmware packages before importing or playing games.\n\nMissing: %@\n\nUse + > Import firmware (.PUP).",
+            @"Install the main firmware and font package before importing or playing games.\n\nMissing: %@\n\nUse + > Import firmware (.PUP).",
             missing]);
     return false;
 }
@@ -851,8 +851,43 @@ void present_settings_sheet(NSString *title_id, NSString *display_name) {
 }
 
 void show_jit_required_alert() {
-    present_alert(@"JIT required",
-        @"Open StikDebug, enable JIT, and keep it attached until Tsubomi finishes Preparing JIT.");
+    if (@available(iOS 26.0, *)) {
+        present_alert(@"JIT required",
+            @"Open StikDebug, enable JIT, and keep it attached until Tsubomi finishes Preparing JIT.");
+        return;
+    }
+
+    UIViewController *root = active_window().rootViewController;
+    if (!root || root.presentedViewController)
+        return;
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Enable JIT"
+        message:@"If you installed Tsubomi with TrollStore Lite or TrollStore, request JIT below, then return to Tsubomi. If Magnifier opens, enable URL Scheme in TrollStore settings. Otherwise use a JIT enabler compatible with your iOS version."
+        preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"TrollStore Lite / TrollStore"
+        style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+            NSString *bundleID = NSBundle.mainBundle.bundleIdentifier;
+            if (!bundleID.length) {
+                present_alert(@"JIT request failed", @"The app bundle identifier is missing.");
+                return;
+            }
+            NSURLComponents *components = [[NSURLComponents alloc] init];
+            components.scheme = @"apple-magnifier";
+            components.host = @"enable-jit";
+            components.queryItems = @[[NSURLQueryItem queryItemWithName:@"bundle-id" value:bundleID]];
+            [UIApplication.sharedApplication openURL:components.URL options:@{}
+                completionHandler:^(BOOL opened) {
+                    if (!opened) {
+                        perform_on_main(^{
+                            present_alert(@"Could not open TrollStore",
+                                @"Install and enable TrollStore Lite or TrollStore for your device, or use another compatible JIT enabler.");
+                        });
+                    }
+                }];
+            // Opening the helper is only a request. The core's periodic probe
+            // alone can clear the JIT warning after permission is actually granted.
+        }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    [root presentViewController:alert animated:YES completion:nil];
 }
 
 void show_graphics_help() {

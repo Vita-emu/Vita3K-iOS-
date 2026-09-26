@@ -89,7 +89,7 @@ bool firmware_ready_or_alert();
 // The graphics-help explainer from the library header.
 void show_graphics_help();
 
-// Explains that JIT must be attached before a game can boot.
+// Offers a compatible JIT enabler before a game can boot.
 void show_jit_required_alert();
 
 // Presents a settings sheet over the library. `title_id` empty means global.
