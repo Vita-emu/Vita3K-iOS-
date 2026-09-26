@@ -15,7 +15,11 @@ constexpr uint32_t STANDARD_PAGE_SIZE = KiB(4);
 constexpr bool PAGE_NAME_TRACKING = true;
 constexpr uint32_t arena_size = KiB(256);
 constexpr int PROT_NONE = 0, PROT_READ = 1, PROT_WRITE = 2;
-constexpr int MADV_FREE = 10, MADV_DONTNEED = 11;
+#ifdef VITA3K_PLATFORM_IOS
+constexpr int MADV_FREE = 10;
+#else
+constexpr int MADV_DONTNEED = 11;
+#endif
 #define LOG_CRITICAL_IF(condition, ...) assert(!(condition))
 #define LOG_CRITICAL(...) assert(false)
 static Address align_down(Address address, uint32_t alignment) { return address & ~(alignment - 1); }
