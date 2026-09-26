@@ -76,6 +76,12 @@ void set_log_mem(CPUState &state, bool log);
 bool get_log_code(CPUState &state);
 bool get_log_mem(CPUState &state);
 
+#if defined(VITA3K_PLATFORM_IOS)
+// Shared by per-thread allocations and the universal-JIT pool. Fixed for the
+// process lifetime so returned regions always match subsequent allocations.
+std::size_t ios_jit_code_cache_size();
+#endif
+
 // arm64 only: the oaknut/StikDebug JIT region pool does not exist on the
 // x86_64 Simulator, where dynarmic's x64 backend allocates its own cache.
 #if defined(VITA3K_PLATFORM_IOS) && defined(__aarch64__)

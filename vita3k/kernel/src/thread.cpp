@@ -241,7 +241,7 @@ void ThreadState::run_loop() {
                 update_status(ThreadStatus::dormant);
 #if defined(VITA3K_PLATFORM_IOS)
                 // Dormant threads keep their ThreadState until deleted; give
-                // the pooled 16 MiB JIT region back so exited-but-not-deleted
+                // the JIT region back so exited-but-not-deleted
                 // threads cannot exhaust the iOS JIT region pool. Threads that
                 // have restarted are cyclic (the GXM display queue parks per
                 // frame) — releasing theirs meant a fresh Dynarmic cache and a

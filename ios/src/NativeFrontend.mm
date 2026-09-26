@@ -13,6 +13,7 @@
 #define Ptr MacTypesPtr
 #import <AVFoundation/AVFoundation.h>
 #import <GameController/GameController.h>
+#import <ImageIO/ImageIO.h>
 #import <QuartzCore/QuartzCore.h>
 #import <UIKit/UIKit.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
@@ -537,6 +538,11 @@ NSCache<NSString *, UIImage *> *cover_cache() {
     dispatch_once(&once, ^{
         cache = [[NSCache alloc] init];
         cache.countLimit = 240;
+        // Cost is decoded pixel storage, not compressed file size. NSCache's
+        // budget is advisory; views may still retain images currently on screen.
+        const uint64_t memory = NSProcessInfo.processInfo.physicalMemory;
+        cache.totalCostLimit = (memory > 0 && memory <= 3ULL * 1024 * 1024 * 1024)
+            ? 32 * 1024 * 1024 : 64 * 1024 * 1024;
         // Evict on memory warnings rather than competing with the emulator's
         // guest allocations.
         [NSNotificationCenter.defaultCenter
@@ -570,27 +576,49 @@ UIImage *cover_image(NSString *path, void (^ready)(UIImage *)) {
     });
     NSString *key = [path copy];
     dispatch_async(queue, ^{
-        UIImage *image = [UIImage imageWithContentsOfFile:key];
-        // Force the decode here instead of on the first draw, which is what
-        // actually stalls the render loop mid-scroll.
-        if (image)
-            image = [image imageByPreparingForDisplay] ?: image;
-        if (!image) {
-            LOG_ERROR("iOS library art could not be decoded at '{}'", key.UTF8String);
-            // Still report completion: callers that bridge this to an async
-            // await would otherwise never resume. Callers keep their
-            // placeholder by ignoring a nil result.
+        @autoreleasepool {
+            // Another cell may have queued this same cover before the first decode
+            // finished. Reuse its result rather than decoding again on this queue.
+            UIImage *image = [cover_cache() objectForKey:key];
+            if (!image) {
+                // Downsample directly from the source so a large custom cover never
+                // needs a full-resolution decoded bitmap merely to draw a card.
+                NSURL *url = [NSURL fileURLWithPath:key];
+                CGImageSourceRef source = CGImageSourceCreateWithURL((__bridge CFURLRef)url,
+                    (__bridge CFDictionaryRef)@{(__bridge NSString *)kCGImageSourceShouldCache: @NO});
+                if (source) {
+                    CGImageRef thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0,
+                        (__bridge CFDictionaryRef)@{
+                            (__bridge NSString *)kCGImageSourceCreateThumbnailFromImageAlways: @YES,
+                            (__bridge NSString *)kCGImageSourceCreateThumbnailWithTransform: @YES,
+                            (__bridge NSString *)kCGImageSourceShouldCacheImmediately: @YES,
+                            (__bridge NSString *)kCGImageSourceThumbnailMaxPixelSize: @1024,
+                        });
+                    if (thumbnail) {
+                        image = [UIImage imageWithCGImage:thumbnail];
+                        const NSUInteger cost = CGImageGetBytesPerRow(thumbnail) * CGImageGetHeight(thumbnail);
+                        [cover_cache() setObject:image forKey:key cost:cost];
+                        CGImageRelease(thumbnail);
+                    }
+                    CFRelease(source);
+                }
+            }
+            if (!image) {
+                LOG_ERROR("iOS library art could not be decoded at '{}'", key.UTF8String);
+                // Still report completion: callers that bridge this to an async
+                // await would otherwise never resume. Callers keep their
+                // placeholder by ignoring a nil result.
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    if (ready)
+                        ready(nil);
+                });
+                return;
+            }
             dispatch_async(dispatch_get_main_queue(), ^{
                 if (ready)
-                    ready(nil);
+                    ready(image);
             });
-            return;
         }
-        [cover_cache() setObject:image forKey:key];
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if (ready)
-                ready(image);
-        });
     });
     return nil;
 }

@@ -2652,7 +2652,6 @@ bool has_physical_controller(CtrlState &state) {
     });
 }
 
-constexpr std::size_t IOS_JIT_CACHE_SIZE = 16 * 1024 * 1024;
 // Gravity Rush runs ~24 concurrently-live guest threads; exited-but-undeleted
 // threads now release their region when they park dormant, but keep headroom
 // for thread churn (audio/savedata workers) on top of the live set.
@@ -2685,7 +2684,7 @@ bool prepare_ios_jit_pool() {
     g_unhandled_universal_jit_breakpoint.store(false, std::memory_order_relaxed);
     try {
         const std::size_t warmed_jit_regions =
-            prewarm_ios_jit_code_cache_pool(IOS_JIT_POOL_TARGET, IOS_JIT_CACHE_SIZE);
+            prewarm_ios_jit_code_cache_pool(IOS_JIT_POOL_TARGET, ios_jit_code_cache_size());
         if (warmed_jit_regions < IOS_JIT_POOL_TARGET) {
             LOG_CRITICAL("iOS JIT region pool is under target: target={} available={}",
                 IOS_JIT_POOL_TARGET, warmed_jit_regions);

@@ -2,6 +2,7 @@ set(SOURCE_LIST
 include/cpu/state.h
 include/cpu/common.h
 include/cpu/functions.h
+include/cpu/ios_jit_policy.h
 include/cpu/impl/dynarmic_cpu.h
 include/cpu/impl/interface.h
 include/cpu/disasm/functions.h

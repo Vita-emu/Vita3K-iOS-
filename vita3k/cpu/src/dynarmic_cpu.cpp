@@ -17,6 +17,7 @@
 
 #include "cpu/common.h"
 #include <cpu/impl/dynarmic_cpu.h>
+#include <cpu/ios_jit_policy.h>
 #include <cpu/state.h>
 #include <util/log.h>
 
@@ -30,6 +31,7 @@
 // allocates its own code cache, so every oaknut path below is arm64-only.
 #if defined(VITA3K_PLATFORM_IOS) && defined(__aarch64__)
 #include <oaknut/code_block.hpp>
+#include <sys/sysctl.h>
 #endif
 
 #include <bit>
@@ -37,6 +39,25 @@
 #include <mutex>
 #include <optional>
 #include <string>
+
+#if defined(VITA3K_PLATFORM_IOS)
+std::size_t ios_jit_code_cache_size() {
+    static const std::size_t cache_size = [] {
+        std::uint64_t physical_memory = 0;
+#if defined(__aarch64__)
+        std::size_t size = sizeof(physical_memory);
+        if (sysctlbyname("hw.memsize", &physical_memory, &size, nullptr, 0) != 0
+            || size != sizeof(physical_memory))
+            physical_memory = 0;
+#endif
+        const std::size_t selected = ios_jit_cache_size_for_memory(physical_memory);
+        LOG_INFO("iOS JIT cache budget: {} MiB per thread (physical memory: {} MiB; 0 = unknown)",
+            selected / (1024 * 1024), physical_memory / (1024 * 1024));
+        return selected;
+    }();
+    return cache_size;
+}
+#endif
 
 #if defined(VITA3K_PLATFORM_IOS) && defined(__aarch64__)
 namespace {
@@ -380,13 +401,10 @@ Dynarmic::ExclusiveMonitor DynarmicCPU::shared_monitor(MAX_CORE_COUNT);
 std::unique_ptr<Dynarmic::A32::Jit> DynarmicCPU::make_jit() {
     Dynarmic::A32::UserConfig config{};
 #if defined(VITA3K_PLATFORM_IOS)
-    // Vita3K owns one Dynarmic JIT per guest thread. On iOS 26+, each cache
-    // also has a same-sized writable vm_remap alias, so Dynarmic's 128 MiB
-    // default scales poorly during middleware worker-thread bursts. Sixteen
-    // MiB remains above Dynarmic's documented approximate 8 MiB minimum; the
-    // backend clears the cache when it approaches capacity.
-    constexpr std::size_t IOS_CODE_CACHE_SIZE = 16 * 1024 * 1024;
-    config.code_cache_size = IOS_CODE_CACHE_SIZE;
+    // One cache per guest thread: use a smaller budget on <=3 GiB devices.
+    // Both budgets exceed Dynarmic's approximate 8 MiB minimum. The backend
+    // clears a full cache; cyclic threads retain theirs across restarts.
+    config.code_cache_size = ios_jit_code_cache_size();
 #endif
     config.arch_version = Dynarmic::A32::ArchVersion::v7;
     config.callbacks = cb.get();

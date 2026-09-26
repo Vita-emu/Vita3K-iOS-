@@ -85,6 +85,34 @@ Protocol references: [TrollStore URL scheme](https://github.com/opa334/TrollStor
 [Lite URL registration](https://github.com/opa334/TrollStore/blob/main/TrollStoreLite/Resources/Info.plist),
 and [shared JIT handler](https://github.com/opa334/TrollStore/blob/main/TrollStore/TSSceneDelegate.m).
 
+## Memory and performance tuning
+
+- On devices reporting at most 3 GiB of physical RAM, each active guest thread
+  now gets **12 MiB** of JIT code-cache capacity instead of 16 MiB. Unknown RAM
+  and larger devices keep 16 MiB. The setting is fixed for the process and is
+  shared with pool prewarming so pool allocations always match thread caches.
+  At 24 active caches this reduces configured capacity from 384 to 288 MiB;
+  it is not a measured 96 MiB reduction in physical footprint. The iOS 26
+  writable alias shares backing pages with executable memory.
+- Lazy JIT creation and cache release for one-shot dormant threads remain in
+  place. Cyclic threads retain translated code across restarts. Smaller caches
+  can require more recompilation in code-heavy games; actual FPS and memory
+  must be compared on the same game scene. Safe CPU optimizations stay enabled
+  according to the user's existing CPU setting.
+- Artwork is downsampled during background decoding to at most **1024 pixels**
+  on the longest side. Queued requests reuse an already decoded cover. This
+  avoids repeatedly decoding large imported covers at their source resolution.
+- The artwork cache tracks decoded byte cost and requests a **32 MiB** budget
+  on devices with at most 3 GiB RAM, or 64 MiB otherwise. This is an advisory
+  NSCache limit: currently displayed images can be retained separately by views.
+  Existing memory-warning eviction remains in place.
+
+To compare on iPhone 8 Plus, keep the same game, resolution, CPU settings and
+JIT method. Record FPS/frametime and RAM after warm-up in the same scene, after
+10 minutes, and after quitting/relaunching twice. Also scroll a library with
+large covers. Check `tsubomi.log` for the selected per-thread JIT budget. No
+on-device performance result is available from the Linux development sandbox.
+
 ## iPhone 8 Plus validation still required
 
 1. Sign/install on iOS 16.7.16 and open the app without JIT. Onboarding, settings,
