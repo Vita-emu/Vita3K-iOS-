@@ -80,7 +80,7 @@ public:
     void push(const T &item) {
         {
             std::unique_lock<std::mutex> mlock(mutex_);
-            while (!aborted && queue_.size() == maxPendingCount_) {
+            while (!aborted && queue_.size() >= maxPendingCount_) {
                 cond_.wait(mlock);
             }
             if (aborted) {
@@ -92,6 +92,7 @@ public:
     }
 
     size_t size() {
+        std::lock_guard<std::mutex> lock(mutex_);
         return queue_.size();
     }
 
@@ -100,7 +101,10 @@ public:
     }
 
     void abort() {
-        aborted = true;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            aborted = true;
+        }
         condempty_.notify_all();
         cond_.notify_all();
     }
@@ -111,8 +115,12 @@ public:
 
     void reset() {
         std::queue<T> empty;
-        std::swap(queue_, empty);
-        aborted = false;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            std::swap(queue_, empty);
+            aborted = false;
+        }
+        cond_.notify_all();
     }
 
     void wait_empty() {

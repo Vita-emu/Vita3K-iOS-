@@ -24,6 +24,7 @@
 #include <gxm/functions.h>
 #include <renderer/functions.h>
 
+#include <util/ios_runtime_tuning.h>
 #include <util/log.h>
 #include <util/overloaded.h>
 
@@ -601,8 +602,17 @@ void new_frame(VKContext &context) {
         frame.rendered_fences.clear();
     }
 
-    device.resetCommandPool(frame.prerender_pool);
-    device.resetCommandPool(frame.render_pool);
+    vk::CommandPoolResetFlags reset_flags{};
+#ifdef VITA3K_PLATFORM_IOS
+    // Fences above have completed: no command buffer in these pools is pending.
+    // Periodically return driver allocations retained by unusually large scenes.
+    // Visit every frame slot, keeping normal frames on the cheap reuse path.
+    if (ios_runtime::tuning.trim_staging_buffers
+        && (context.frame_timestamp / MAX_FRAMES_RENDERING) % 120 == 0)
+        reset_flags = vk::CommandPoolResetFlagBits::eReleaseResources;
+#endif
+    device.resetCommandPool(frame.prerender_pool, reset_flags);
+    device.resetCommandPool(frame.render_pool, reset_flags);
 
     // set the position in the used descriptor queue back to the beginning
     for (int i = 0; i < 16; i++) {

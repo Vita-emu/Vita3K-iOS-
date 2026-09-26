@@ -13,6 +13,7 @@ add_library(packages STATIC
             include/packages/pkg.h
             include/packages/sce_types.h
             include/packages/sfo.h
+            include/packages/stream_decrypt.h
             include/packages/stream_copy.h
 )
 target_include_directories(packages PUBLIC include)

@@ -10,6 +10,7 @@
 #include <memory>
 #include <openssl/evp.h>
 #include <packages/stream_copy.h>
+#include <packages/stream_decrypt.h>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -64,9 +65,7 @@ static auto get_segments(const uint8_t *p, const SceHeader &h, KeyStore &, uint6
     assert(p[h.header_length - 1] == 0); // Real metadata decoder is outside this fixture.
     return std::vector<Segment>{ fixture_segment };
 }
-static std::string decompress_segments(const std::vector<unsigned char> &, uint64_t) { throw std::runtime_error("Compressed SCE fixture not supplied"); }
 // INSERT_PUP
-using mz_uint64 = uint64_t;
 // INSERT_ARCHIVE_OUTPUT
 // INSERT_ARCHIVE_WRITE
 static int fixture_cores = 6, fixture_ram = 3072;
@@ -236,9 +235,16 @@ int main(int argc, char **argv) {
     assert(compiler_workers() == 1);
     fixture_cores = 6;
     fixture_ram = 4096;
-    assert(compiler_workers() == 4);
+    assert(compiler_workers() == 2);
     fixture_ram = 0;
+    assert(compiler_workers() == 2);
+    fixture_cores = 16;
     assert(compiler_workers() == 4);
+    fixture_ram = 3072;
+    assert(compiler_workers() == 2);
+    fixture_cores = 2;
+    fixture_ram = 4096;
+    assert(compiler_workers() == 1);
     std::vector<uint64_t> progress;
     InstallOutput archive_output{ .stream = std::ofstream(root / "archive-payload"),
         .progress = [&](uint64_t bytes) { progress.push_back(bytes); } };
@@ -331,6 +337,54 @@ int main(int argc, char **argv) {
     fixture_segment.size += 1;
     segment.open(root / "segment", std::ios::binary);
     rejected([&] { decrypt_segments(segment, root, "invalid", keys); });
+
+    // Stream through real miniz and AES across both input and output boundaries.
+    auto encrypted_stream = [&](const std::string &plain, bool compressed, bool truncate_input = false, bool fail_output = false) {
+        auto cipher = std::unique_ptr<EVP_CIPHER_CTX, decltype(&EVP_CIPHER_CTX_free)>(EVP_CIPHER_CTX_new(), EVP_CIPHER_CTX_free);
+        std::string bytes(plain.size() + EVP_MAX_BLOCK_LENGTH, '\0');
+        int count = 0, tail = 0;
+        assert(EVP_EncryptInit_ex(cipher.get(), EVP_aes_128_ctr(), nullptr, reinterpret_cast<const unsigned char *>(key.data()), reinterpret_cast<const unsigned char *>(key.data())) == 1);
+        assert(EVP_EncryptUpdate(cipher.get(), reinterpret_cast<unsigned char *>(bytes.data()), &count, reinterpret_cast<const unsigned char *>(plain.data()), plain.size()) == 1);
+        assert(EVP_EncryptFinal_ex(cipher.get(), reinterpret_cast<unsigned char *>(bytes.data()) + count, &tail) == 1);
+        bytes.resize(count + tail);
+        const auto declared = bytes.size();
+        if (truncate_input) bytes.pop_back();
+        std::istringstream source(bytes);
+        std::ostringstream dest;
+        if (fail_output) dest.setstate(std::ios::badbit);
+        assert(EVP_DecryptInit_ex(cipher.get(), EVP_aes_128_ctr(), nullptr, reinterpret_cast<const unsigned char *>(key.data()), reinterpret_cast<const unsigned char *>(key.data())) == 1);
+        packages::decrypt_stream_exact(source, dest, cipher.get(), declared, compressed);
+        return dest.str();
+    };
+    auto compress_fixture = [](const std::string &plain) {
+        mz_ulong size = mz_compressBound(plain.size());
+        std::string bytes(size, '\0');
+        assert(mz_compress(reinterpret_cast<unsigned char *>(bytes.data()), &size,
+            reinterpret_cast<const unsigned char *>(plain.data()), plain.size()) == MZ_OK);
+        bytes.resize(size);
+        return bytes;
+    };
+    std::string random_bytes(400007, '\0');
+    uint32_t seed = 31337;
+    for (auto &byte : random_bytes) {
+        seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5;
+        byte = static_cast<char>(seed);
+    }
+    auto compressed = compress_fixture(random_bytes);
+    assert(compressed.size() > 3 * 65536);
+    assert(encrypted_stream(compressed, true) == random_bytes);
+    const auto dense = compress_fixture(std::string(4 * 1024 * 1024, 'x'));
+    assert(encrypted_stream(dense, true) == std::string(4 * 1024 * 1024, 'x'));
+    assert(encrypted_stream(compress_fixture(""), true).empty());
+    assert(encrypted_stream("", false).empty());
+    assert(encrypted_stream(compressed + std::string(23, '\0'), true) == random_bytes);
+    rejected([&] { encrypted_stream(compressed, true, true); });
+    rejected([&] { encrypted_stream(compressed.substr(0, compressed.size() - 1), true); });
+    rejected([&] { encrypted_stream("not zlib", true); });
+    compressed.back() ^= 1; // checksum corruption
+    rejected([&] { encrypted_stream(compressed, true); });
+    rejected([&] { encrypted_stream(dense, true, false, true); });
+    rejected([&] { encrypted_stream(payload, false, false, true); });
 
     vulkan::VKState state;
     state.shaders_path = root / "cache";

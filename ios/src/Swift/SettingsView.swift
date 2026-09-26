@@ -238,7 +238,7 @@ struct SettingsView: View {
                     Text("\(value) textures").tag(value)
                 }
             }
-            Toggle("Trim oversized upload buffers", isOn: $trimStagingBuffers)
+            Toggle("Reclaim unused GPU buffer memory", isOn: $trimStagingBuffers)
             Button("Use iPhone 8 Plus memory settings") {
                 guestMemoryMiB = 768
                 jitCacheMiB = 8

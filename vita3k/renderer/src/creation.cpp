@@ -278,8 +278,12 @@ bool init(FrameHost &frame, std::unique_ptr<State> &state, Backend backend, cons
 
     state->current_backend = backend;
 
-    // Can change this
+    // Backpressure bounds queued guest command lists while the GPU catches up.
+#ifdef VITA3K_PLATFORM_IOS
+    state->command_buffer_queue.maxPendingCount_ = 8;
+#else
     state->command_buffer_queue.maxPendingCount_ = 30;
+#endif
 
     return true;
 }

@@ -27,6 +27,7 @@
 #include <packages/exfat.h>
 #include <packages/sce_types.h>
 #include <packages/stream_copy.h>
+#include <packages/stream_decrypt.h>
 #include <util/fs.h>
 
 #include <algorithm>
@@ -173,7 +174,6 @@ static void decrypt_segments(std::ifstream &infile, const fs::path &outdir, cons
     auto *cipher = algorithm.get();
     if (!cipher_ctx || !cipher)
         throw std::runtime_error("Could not initialize firmware decryption");
-    int dec_len = 0;
 
     // Reset the offset to the beginning of the file
     infile.seekg(0, std::ios::beg);
@@ -195,31 +195,18 @@ static void decrypt_segments(std::ifstream &infile, const fs::path &outdir, cons
         return get_segments(header.data(), sce_hdr, SCE_KEYS, sysver, selftype);
     }();
     for (const auto &sceseg : scesegs) {
-        fs::ofstream outfile(outdir / fs_utils::path_concat(filename, ".seg02"), std::ios::binary);
-        infile.seekg(sceseg.offset);
         if (sceseg.offset > static_cast<uint64_t>(file_size)
             || sceseg.size > static_cast<uint64_t>(file_size) - sceseg.offset
-            || sceseg.size > static_cast<uint64_t>(std::numeric_limits<int>::max()))
-            throw std::runtime_error("Invalid SCE segment size");
-        std::vector<unsigned char> decrypted_data(sceseg.size);
-        if (!infile.read(reinterpret_cast<char *>(decrypted_data.data()), sceseg.size))
-            throw std::runtime_error("Truncated SCE segment");
-        if (EVP_DecryptInit_ex(cipher_ctx, cipher, nullptr, reinterpret_cast<const unsigned char *>(sceseg.key.c_str()), reinterpret_cast<const unsigned char *>(sceseg.iv.c_str())) != 1
-            || EVP_CIPHER_CTX_set_padding(cipher_ctx, 0) != 1
-            || EVP_DecryptUpdate(cipher_ctx, decrypted_data.data(), &dec_len, decrypted_data.data(), static_cast<int>(sceseg.size)) != 1)
+            || sceseg.key.size() != 16 || sceseg.iv.size() != 16)
+            throw std::runtime_error("Invalid SCE segment size or key");
+        fs::ofstream outfile(outdir / fs_utils::path_concat(filename, ".seg02"), std::ios::binary);
+        infile.seekg(sceseg.offset);
+        if (!outfile || !infile)
+            throw std::runtime_error("Could not open firmware segment streams");
+        if (EVP_DecryptInit_ex(cipher_ctx, cipher, nullptr, reinterpret_cast<const unsigned char *>(sceseg.key.data()), reinterpret_cast<const unsigned char *>(sceseg.iv.data())) != 1
+            || EVP_CIPHER_CTX_set_padding(cipher_ctx, 0) != 1)
             throw std::runtime_error("Firmware segment decryption failed");
-        unsigned char final_bytes[EVP_MAX_BLOCK_LENGTH];
-        int final_size = 0;
-        if (EVP_DecryptFinal_ex(cipher_ctx, final_bytes, &final_size) != 1
-            || final_size != 0 || static_cast<uint64_t>(dec_len) != sceseg.size)
-            throw std::runtime_error("Incomplete firmware segment decryption");
-
-        if (sceseg.compressed) {
-            const std::string decompressed_data = decompress_segments(decrypted_data, sceseg.size);
-            outfile.write(decompressed_data.c_str(), decompressed_data.size());
-        } else {
-            outfile.write((char *)decrypted_data.data(), sceseg.size);
-        }
+        packages::decrypt_stream_exact(infile, outfile, cipher_ctx, sceseg.size, sceseg.compressed);
         outfile.close();
         if (!outfile)
             throw std::runtime_error("Could not write decrypted firmware segment");

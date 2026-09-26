@@ -56,3 +56,57 @@ encounter and warm-cache scenes; record FPS, frame time, CPU time and memory.
 Include a scene with several pipelines sharing shaders and check for missing
 geometry, hangs, relaunch problems and background/foreground regressions.
 No device performance measurements are available from the Linux sandbox.
+
+## Bounded memory on iOS
+
+- The iOS renderer applies backpressure at eight pending guest command lists
+  (desktop remains at 30). A full queue blocks its producer until the renderer
+  consumes a list; commands are not dropped. This bounds the list count, not the
+  bytes inside a scene. Queue shutdown now changes the abort predicate under the
+  same mutex used by waiting threads, preventing a lost shutdown wakeup.
+- With **Memory → Reclaim unused GPU buffer memory** enabled, each recycled
+  Vulkan frame slot requests `eReleaseResources` once every 120 slot cycles,
+  after its GPU fences complete. Ordinary resets reuse driver allocations.
+  This supplements the existing upload-buffer trimming. The pinned
+  [MoltenVK 1.4.2 implementation](https://github.com/KhronosGroup/MoltenVK/blob/v1.4.2/MoltenVK/MoltenVK/Commands/MVKCommandPool.mm)
+  releases cached command objects on that flag. It can reduce memory retained
+  after a large scene, with a possible allocation cost on subsequent frames.
+  RenderPass barriers, attachment operations and submission order are preserved.
+- Automatic shader compilation uses the existing CPU-core policy capped at two
+  workers on devices reporting at most 3 GiB and four otherwise. It no longer
+  forces at least four workers on larger/unknown-memory devices. The explicit
+  Settings worker count still takes precedence. Guest/audio/render threads keep
+  their synchronization responsibilities.
+- PKG and VPK payloads already stream from disk. PUP firmware segment decryption
+  now also streams AES-CTR and miniz inflation through two 64 KiB heap buffers,
+  plus fixed cipher/inflater state. It no longer retains whole encrypted and
+  expanded segments together. Header parsing remains bounded at 16 MiB.
+  Truncated input, invalid compression/checksums and output write failures fail
+  installation. This optimizes installation; it is not an in-game asset cache.
+
+The default 768 MiB budget covers guest allocations. A reserved 4 GiB guest
+address range is not 4 GiB of resident RAM. Guest pages are committed as needed
+and freed pages are discarded without changing guest addresses. Moving live
+allocations for compaction would invalidate guest pointers and GPU mappings.
+The process also needs memory for Metal, JIT, shaders, audio and the UI; the guest
+budget alone cannot guarantee that iOS will not terminate it for memory pressure.
+
+JIT already defaults to 8 MiB per initialized guest CPU on devices with at most
+3 GiB, or 16 MiB otherwise; it is not a single process-wide 8 MiB allocation.
+Caches are created lazily and released at safe dormant-thread lifecycle points.
+There is no game-independent scene-change event that safely permits discarding
+executing JIT code, so scene-change eviction is not implemented. The experimental
+IR backend is selectable but still lacks instructions required by general games.
+
+### Focused host checks
+
+```sh
+PYTHONPATH=.ci/tests python3 -m unittest test_ios_install_and_cache test_render_memory -v
+```
+
+These execute production streaming code with real OpenSSL/miniz, production
+frame recycling with a recording Vulkan substitute, and real queue threads.
+They cover chunk boundaries, high expansion, corrupt/truncated input, failed
+writes, worker selection, completion-before-reset, all frame slots, the Settings
+opt-out, desktop behavior and producer/consumer shutdown. Actual Metal memory
+savings, frame-time costs and gameplay compatibility require an iPhone run.

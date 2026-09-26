@@ -58,7 +58,7 @@ and backgrounding retain their existing persistence paths.
 | JIT cache | Runtime tuning → `ios_jit_code_cache_size` and pool prewarm; restart |
 | CPU optimizations | Config → Dynarmic configuration; next game launch |
 | Guest RAM budget | Runtime tuning → `mem::init` and guest allocator; restart |
-| Texture entries / upload trimming | Runtime tuning → texture/staging caches; restart |
+| Texture entries / GPU buffer reclamation | Runtime tuning → texture/staging caches and periodic completed command-pool release; restart |
 | Resolution, V-Sync, accuracy, surface sync, memory mapping, anisotropy | Native settings → current config → renderer initialization/runtime settings; next launch is the safe application boundary |
 | Shader disk cache / async compilation | Native settings → renderer atomics / pipeline cache; next launch |
 | Shader workers / precompilation | Runtime tuning → pipeline worker policy / launch preparation; restart. Workers require async compilation; precompilation requires disk caching |

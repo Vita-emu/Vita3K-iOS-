@@ -248,7 +248,7 @@ void PipelineCache::init(bool support_rasterized_order_access) {
     if (memory_mib > 0 && memory_mib <= 3 * 1024)
         nb_worker_threads = std::min(nb_worker_threads, 2);
     else
-        nb_worker_threads = std::max(nb_worker_threads, 4);
+        nb_worker_threads = std::min(nb_worker_threads, 4);
     const int requested_workers = ios_runtime::shader_workers(ios_runtime::tuning.shader_workers, nb_logical_threads);
     if (requested_workers)
         nb_worker_threads = requested_workers;

@@ -59,6 +59,9 @@ class IOSInstallAndCacheTests(unittest.TestCase):
             fixture = Path(directory) / "fixture.cpp"
             binary = Path(directory) / "fixture"
             fixture.write_text(source)
+            miniz = Path(directory) / "miniz.o"
+            subprocess.run(shlex.split(os.environ.get("CC", "cc")) + ["-c",
+                str(root / "external/miniz/miniz.c"), "-o", str(miniz)], check=True)
             subprocess.run(compiler + ["-std=c++20", "-Wall", "-Wextra", "-Werror",
-                "-I", str(root / "vita3k/packages/include"), "-I", str(root / "vita3k/util/include"), str(fixture), *crypto_flags, "-o", str(binary)], check=True)
+                "-I", str(root / "vita3k/packages/include"), "-I", str(root / "vita3k/util/include"), "-I", str(root / "external/miniz"), str(fixture), str(miniz), *crypto_flags, "-o", str(binary)], check=True)
             subprocess.run([str(binary), directory], check=True)
