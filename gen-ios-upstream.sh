@@ -7,7 +7,7 @@ set -ex
 #
 # Prerequisites, all set up by the steps in that workflow:
 #   * build-deps/vcpkg   bootstrapped at pinned commit 77df67c
-#   * build-deps/moltenvk MoltenVK 1.4.1 ios-arm64 slice
+#   * build-deps/moltenvk MoltenVK 1.4.2 ios-arm64 slice
 #   * boost from Homebrew (VITA3K_FORCE_SYSTEM_BOOST)
 #   * ios/patches/0001-oaknut-ios-rwx-jit.patch applied to external/dynarmic
 
