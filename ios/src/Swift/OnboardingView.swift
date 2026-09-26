@@ -53,14 +53,14 @@ struct OnboardingView: View {
         ),
         Page(
             symbol: "gearshape.2",
-            title: "1. Install System Firmware",
-            body: "Choose PSVUPDAT.PUP from Files. This installs the Vita system software. Wait for Installed, then tap Next.",
+            title: "Firmware",
+            body: "Choose PSVUPDAT.PUP to install the system firmware.",
             requirement: .mainFirmware
         ),
         Page(
             symbol: "textformat",
-            title: "2. Install Fonts",
-            body: "Choose PSP2UPDAT.PUP from Files. This separate package installs the fonts games need. You need both packages; renaming the system firmware will not turn it into the font package.",
+            title: "Fonts",
+            body: "Choose PSP2UPDAT.PUP to install the fonts.",
             requirement: .fontPackage
         ),
         Page(
@@ -84,21 +84,28 @@ struct OnboardingView: View {
     }
 
     var body: some View {
-        // No card. Apple's own first-run flows put the content on the plain
-        // background with the actions pinned to the bottom edge; a material
-        // panel over an opaque background is an invisible rectangle that only
-        // costs vertical space, which is what left the screen mostly empty.
-        VStack(spacing: 0) {
-            Spacer(minLength: 0)
-            ScrollView {
+        ZStack {
+            // Centre the welcome title on the screen, independently of the
+            // height of the bottom actions. Other pages can scroll as needed.
+            if pageIndex == 0 {
                 pageContent
-                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, isCompact ? 60 : 32)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            Spacer(minLength: 0)
-            actions
+            VStack(spacing: 0) {
+                if pageIndex == 0 {
+                    Spacer(minLength: 0)
+                } else {
+                    ScrollView {
+                        pageContent
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+                actions
+            }
+            .padding(.horizontal, isCompact ? 60 : 32)
+            .padding(.bottom, isCompact ? 16 : 32)
         }
-        .padding(.horizontal, isCompact ? 60 : 32)
-        .padding(.bottom, isCompact ? 16 : 32)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(.systemBackground).ignoresSafeArea())
         // Setup can be revisited with Back but cannot be dismissed until ready.
@@ -121,6 +128,8 @@ struct OnboardingView: View {
                 .font(isCompact ? .title2 : .title)
                 .fontWeight(.bold)
                 .multilineTextAlignment(.center)
+                .lineLimit(nil)
+                .fixedSize(horizontal: false, vertical: true)
 
             if !page.body.isEmpty {
                 Text(page.body)
@@ -132,13 +141,6 @@ struct OnboardingView: View {
             }
 
             if page.requirement != nil {
-                Text("Download the file in Files first if it is stored in iCloud. Keep Tsubomi open during installation.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-            }
-
-            if page.requirement != nil {
                 VStack(alignment: .leading, spacing: 8) {
                     Label(firmware.mainFirmwareReady ? "System firmware: Installed" : "System firmware: Not installed",
                           systemImage: firmware.mainFirmwareReady ? "checkmark.circle.fill" : "circle")
@@ -146,14 +148,6 @@ struct OnboardingView: View {
                           systemImage: firmware.fontPackageReady ? "checkmark.circle.fill" : "circle")
                 }
                 .font(.footnote)
-                if !requirementSatisfied && installProgress == nil {
-                    Text(page.requirement == .mainFirmware
-                         ? "Next unlocks when system firmware files have been installed. A version number alone does not confirm installation."
-                         : "Next unlocks when the font package has been installed.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                }
             }
 
             if page.requirement != nil, let status = library.statusMessage {

@@ -81,7 +81,9 @@ static const char *FSTYPE[] = {
     "psp_emulist",
 };
 
-static std::string make_filename(unsigned char *hdr, int64_t filetype, uint32_t index) {
+static std::string make_filename(const unsigned char *hdr, size_t header_length, int64_t filetype, uint32_t index) {
+    if (header_length < 24)
+        throw std::runtime_error("Truncated PUP package header");
     uint32_t magic = 0;
     uint32_t version = 0;
     uint32_t flags = 0;
@@ -94,7 +96,7 @@ static std::string make_filename(unsigned char *hdr, int64_t filetype, uint32_t 
     memcpy(&metaoffs, &hdr[16], 8);
 
     if (magic == SCE_MAGIC && version == 3 && flags == 0x30040) {
-        if (metaoffs > HEADER_LENGTH - 5)
+        if (metaoffs > header_length - 5)
             throw std::runtime_error("Invalid PUP package metadata offset");
         const unsigned char t = hdr[metaoffs + 4];
 
@@ -139,9 +141,13 @@ static void extract_pup_files(const fs::path &pup, const fs::path &output) {
         } else {
             unsigned char hdr[HEADER_LENGTH]{};
             infile.seekg(offset);
-            if (length < sizeof(hdr) || !infile.read(reinterpret_cast<char *>(hdr), sizeof(hdr)))
-                throw std::runtime_error("Truncated PUP package header");
-            filename = make_filename(hdr, filetype, index);
+            // A valid small package need not fill the 4 KiB inspection buffer.
+            // Read only this entry's bytes; make_filename checks the fields it
+            // actually accesses against that length, including the metadata tag.
+            const size_t header_length = static_cast<size_t>(std::min<uint64_t>(length, sizeof(hdr)));
+            if (!infile.read(reinterpret_cast<char *>(hdr), header_length))
+                throw std::runtime_error("Could not read PUP package header");
+            filename = make_filename(hdr, header_length, filetype, index);
         }
         fs::ofstream outfile(output / filename, std::ios::binary);
         infile.seekg(offset);

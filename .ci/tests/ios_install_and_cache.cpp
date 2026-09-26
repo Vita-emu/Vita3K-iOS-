@@ -31,7 +31,12 @@ fs::path path_concat(const fs::path &p, const char *suffix) { return p.string() 
 #define LOG_INFO(...) ((void)0)
 constexpr size_t HEADER_LENGTH = 0x1000;
 const std::map<int, std::string> PUP_TYPES{ { 0x100, "version.txt" }, { 0x101, "license.xml" } };
-static std::string make_filename(unsigned char *, int64_t, uint32_t) { return "segment.pkg"; }
+constexpr uint32_t SCE_MAGIC = 0x454353;
+namespace fmt {
+template <class A, class B>
+std::string format(const char *, A, B) { return "segment.pkg"; }
+}
+// INSERT_PACKAGE_NAME
 struct KeyStore {};
 enum class SelfType { NONE };
 struct MetadataInfo {
@@ -273,6 +278,30 @@ int main(int argc, char **argv) {
     rejected([&] { extract_pup_files(root / "input.pup", root / "pup"); });
     write(root / "input.pup", "SCEUF");
     rejected([&] { extract_pup_files(root / "input.pup", root / "pup"); });
+    // Small unknown/SCE payloads must not be rejected just for being <4 KiB.
+    auto small_package = [&](size_t length, uint64_t metadata_offset) {
+        std::string entry(length, '\0');
+        if (length >= 24) {
+            const uint32_t fields[]{ SCE_MAGIC, 3, 0x30040, 0 };
+            std::memcpy(entry.data(), fields, sizeof(fields));
+            std::memcpy(entry.data() + 16, &metadata_offset, 8);
+        }
+        std::string container = pup.substr(0, 0xa0);
+        const uint64_t small_record[]{ 0x300, 0xa0, length, 0 };
+        std::memcpy(container.data() + 0x80, small_record, sizeof(small_record));
+        container += entry;
+        write(root / "small.pup", container);
+        return entry;
+    };
+    const auto small = small_package(64, 59); // metadata tag at last valid byte
+    extract_pup_files(root / "small.pup", root / "pup");
+    assert(read(root / "pup/segment.pkg") == small);
+    small_package(64, 60); // tag would read beyond this entry
+    rejected([&] { extract_pup_files(root / "small.pup", root / "pup"); });
+    small_package(23, 0);
+    rejected([&] { extract_pup_files(root / "small.pup", root / "pup"); });
+    small_package(64, std::numeric_limits<uint64_t>::max());
+    rejected([&] { extract_pup_files(root / "small.pup", root / "pup"); });
     write(root / "pup/os0-01", "second");
     write(root / "pup/os0-00", payload);
     join_files(root / "pup", "os0-", root / "joined.img");

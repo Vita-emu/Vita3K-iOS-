@@ -39,6 +39,7 @@ class IOSInstallAndCacheTests(unittest.TestCase):
         pup = (root / "vita3k/packages/src/pup.cpp").read_text()
         shaders = (root / "vita3k/renderer/src/shaders.cpp").read_text()
         source = (Path(__file__).parent / "ios_install_and_cache.cpp").read_text()
+        source = source.replace("// INSERT_PACKAGE_NAME", pup[pup.index("static const char *FSTYPE"):pup.index("static void extract_pup_files")])
         source = source.replace("// INSERT_PUP", pup[pup.index("static void extract_pup_files"):pup.index("static void decrypt_pup_packages")])
         archive = (root / "vita3k/packages/src/archive.cpp").read_text()
         struct_start = archive.index("struct InstallOutput {")
