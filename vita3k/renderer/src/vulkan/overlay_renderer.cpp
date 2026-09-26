@@ -774,22 +774,15 @@ void OverlayRenderer::draw_command(vk::CommandBuffer cmd,
 
     const vk::DeviceSize data_size = draw_cmd.verts.size() * sizeof(overlay::vertex);
     const vk::DeviceSize aligned_size = (data_size + 15) & ~vk::DeviceSize(15);
-    const vk::DeviceSize required = m_vertex_buffer_offset + aligned_size;
-
+    // prepare() reserves the entire frame before recording any draw. Growing
+    // here would destroy a buffer referenced by earlier draws in this command.
     auto &vb = m_vertex_buffers[m_active_frame_slot];
-    if (!vb.buffer || required > vb.size) {
-        vb.destroy();
-        vb = vkutil::Buffer(std::max(required * 2, vk::DeviceSize(256 * 1024)));
-        vb.init_buffer(
-            vk::BufferUsageFlagBits::eVertexBuffer,
-            vkutil::vma_mapped_alloc);
-        m_vertex_buffer_offset = 0;
-    }
 
     memcpy(static_cast<uint8_t *>(vb.mapped_data) + m_vertex_buffer_offset,
         draw_cmd.verts.data(), data_size);
     const vk::DeviceSize this_offset = m_vertex_buffer_offset;
     m_vertex_buffer_offset += aligned_size;
+    m_state->allocator.flushAllocation(vb.allocation, this_offset, data_size);
 
     vk::ImageView tex_2d_view;
     vk::ImageView tex_array_view;
@@ -1017,6 +1010,22 @@ void OverlayRenderer::prepare(vk::CommandBuffer cmd_buffer,
     }
 
     manager.unlock_shared();
+
+    // The swapchain image fence was waited before prepare(). Reserve all
+    // aligned vertex ranges once, while this slot has no pending draw users.
+    vk::DeviceSize required = 0;
+    for (const auto &prepared : m_prepared_views) {
+        for (const auto &draw_cmd : prepared.compiled.draw_commands) {
+            const vk::DeviceSize data_size = draw_cmd.verts.size() * sizeof(overlay::vertex);
+            required += (data_size + 15) & ~vk::DeviceSize(15);
+        }
+    }
+    auto &vb = m_vertex_buffers[m_active_frame_slot];
+    if (required > 0 && (!vb.buffer || required > vb.size)) {
+        vb.destroy();
+        vb = vkutil::Buffer(std::max(required * 2, vk::DeviceSize(256 * 1024)));
+        vb.init_buffer(vk::BufferUsageFlagBits::eVertexBuffer, vkutil::vma_mapped_alloc);
+    }
 }
 
 void OverlayRenderer::render(vk::CommandBuffer cmd_buffer,
