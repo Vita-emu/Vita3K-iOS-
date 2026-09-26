@@ -76,13 +76,14 @@ struct PerformanceOverlayView: View {
     /// Width of the readout text, so the graph can match it exactly. Measured
     /// rather than using maxWidth: .infinity, which made the whole overlay
     /// stretch to the full screen width.
+    @AppStorage("tsubomi.compactPerformanceHUD") private var compactReadout = false
     @State private var textWidth: CGFloat = 0
 
     var body: some View {
         if editingProxy || (state.isVisible && hasAnyMetric) {
             VStack(alignment: .leading, spacing: 6) {
                 Text(editingProxy && !hasAnyMetric ? "60 FPS · 16.7 ms" : readout)
-                    .font(.caption.monospacedDigit().weight(.semibold))
+                    .font((compactReadout ? Font.caption2 : Font.caption).monospacedDigit().weight(.semibold))
                     .fixedSize()
                     .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { textWidth = $0 }
                 if showGraph || (editingProxy && !hasAnyMetric) {
@@ -92,8 +93,8 @@ struct PerformanceOverlayView: View {
                         .frame(width: textWidth, height: 26)
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .padding(.horizontal, compactReadout ? 8 : 12)
+            .padding(.vertical, compactReadout ? 4 : 8)
             // Non-interactive glass: this sits over a 60fps drawable, and an
             // interactive variant would run a live refraction pass every frame
             // for a readout nobody touches. Follows the in-game material

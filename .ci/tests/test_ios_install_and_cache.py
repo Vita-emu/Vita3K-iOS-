@@ -59,5 +59,5 @@ class IOSInstallAndCacheTests(unittest.TestCase):
             binary = Path(directory) / "fixture"
             fixture.write_text(source)
             subprocess.run(compiler + ["-std=c++20", "-Wall", "-Wextra", "-Werror",
-                "-I", str(root / "vita3k/packages/include"), str(fixture), *crypto_flags, "-o", str(binary)], check=True)
+                "-I", str(root / "vita3k/packages/include"), "-I", str(root / "vita3k/util/include"), str(fixture), *crypto_flags, "-o", str(binary)], check=True)
             subprocess.run([str(binary), directory], check=True)

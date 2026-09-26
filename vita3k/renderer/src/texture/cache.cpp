@@ -23,7 +23,11 @@
 #include <gxm/functions.h>
 #include <mem/ptr.h>
 #include <util/align.h>
+#include <util/ios_runtime_tuning.h>
 #include <util/log.h>
+#ifdef VITA3K_PLATFORM_IOS
+#include <SDL3/SDL_cpuinfo.h>
+#endif
 
 #include <algorithm>
 #include <cstring>
@@ -291,13 +295,18 @@ bool TextureCache::init(const bool hashless_texture_cache, const fs::path &textu
     use_protect = hashless_texture_cache;
 
     // initialize the texture queue
-    texture_queue.init(TextureCacheSize);
+    size_t cache_entries = TextureCacheSize;
+#ifdef VITA3K_PLATFORM_IOS
+    cache_entries = ios_runtime::texture_entries(ios_runtime::tuning.texture_entries, SDL_GetSystemRAM());
+    LOG_INFO("iOS texture cache capacity: {} entries", cache_entries);
+#endif
+    texture_queue.init(cache_entries);
     // set the proper index of each entry
-    for (size_t i = 0; i < TextureCacheSize; i++)
+    for (size_t i = 0; i < cache_entries; i++)
         texture_queue.items[i].content.index = static_cast<int>(i);
 
     // prevent stutter caused by the hashmap resizing
-    texture_lookup.reserve(TextureCacheSize);
+    texture_lookup.reserve(cache_entries);
 
     use_sampler_cache = sampler_cache_size > 0;
     if (use_sampler_cache) {

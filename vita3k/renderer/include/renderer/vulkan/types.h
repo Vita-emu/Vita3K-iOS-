@@ -22,6 +22,8 @@
 #include <shader/uniform_block.h>
 #include <vkutil/objects.h>
 
+#include <future>
+
 struct MemState;
 
 namespace renderer::vulkan {
@@ -35,6 +37,7 @@ constexpr int NB_TEXTURE_STAGING_BUFFERS = 16;
 struct TextureStagingBuffer {
     vkutil::Buffer buffer;
     uint32_t used_so_far;
+    uint64_t last_resize_frame = 0;
     uint64_t scene_timestamp = ~0;
     uint64_t frame_timestamp = ~0;
     vk::Fence waiting_fence;
@@ -194,6 +197,11 @@ struct PostSurfaceSyncRequest {
 };
 
 using CallbackRequestFunction = std::function<void()>;
+// A slot may be recycled only after queued CPU readbacks have finished.
+struct SurfaceReadbackBarrierRequest {
+    std::shared_ptr<std::promise<void>> completed;
+};
+
 struct CallbackRequest {
     // use a pointer so the size is similar to other elements of WaitThreadRequest
     // and not to have to mess with move semantics
@@ -216,6 +224,7 @@ typedef std::variant<
     FrameDoneRequest,
     BufferSyncRequest,
     PostSurfaceSyncRequest,
+    SurfaceReadbackBarrierRequest,
     SyncSignalRequest,
     CallbackRequest>
     WaitThreadRequest;

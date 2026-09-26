@@ -32,6 +32,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <future>
 #include <map>
 
 extern "C" {
@@ -112,7 +113,25 @@ void VKSurfaceCache::destroy_framebuffers(vk::ImageView view) {
     }
 }
 
+// PostSurfaceSyncRequest holds a pointer to the cache slot. Its CPU readback
+// must finish before that slot's metadata, buffer or swscale context is reused.
+static void wait_for_surface_readbacks(VKState &state) {
+    if (state.request_queue.is_aborted())
+        return;
+    auto completed = std::make_shared<std::promise<void>>();
+    auto ready = completed->get_future();
+    state.request_queue.push(SurfaceReadbackBarrierRequest{ completed });
+    while (ready.wait_for(std::chrono::milliseconds(10)) != std::future_status::ready) {
+        // Shutdown aborts the queue; do not wait for a discarded barrier.
+        if (state.request_queue.is_aborted())
+            return;
+    }
+}
+
 void VKSurfaceCache::destroy_surface(ColorSurfaceCacheInfo &info) {
+    if (info.need_post_surface_sync)
+        wait_for_surface_readbacks(state);
+
     vkutil::DestroyQueue &destroy_queue = state.frame().destroy_queue;
 
     // don't forget to destroy in the right order
@@ -126,7 +145,27 @@ void VKSurfaceCache::destroy_surface(ColorSurfaceCacheInfo &info) {
         destroy_queue.add(sampled_view.view);
     info.sampled_views.clear();
 
+    if (info.alternate_view)
+        destroy_framebuffers(info.alternate_view);
     destroy_queue.add(info.alternate_view);
+    info.alternate_view = nullptr;
+
+    // Auxiliary readback resources belong to this surface's dimensions and
+    // format too. Retaining them across LRU reuse can copy into an undersized
+    // buffer or blit into an image of the previous format. Defer GPU frees
+    // until the frame fence, exactly like the primary image.
+    if (info.blit_image) {
+        destroy_queue.add_image(*info.blit_image);
+        info.blit_image.reset();
+    }
+    if (info.copy_buffer) {
+        destroy_queue.add_buffer(*info.copy_buffer);
+        info.copy_buffer.reset();
+    }
+    sws_freeContext(info.sws_context);
+    info.sws_context = nullptr;
+    info.need_post_surface_sync = false;
+    info.need_buffer_sync = false;
 
     destroy_framebuffers(info.texture.view);
     destroy_queue.add_image(info.texture);
@@ -167,6 +206,8 @@ void VKSurfaceCache::destroy_surface(DepthStencilSurfaceCacheInfo &info) {
 
     destroy_queue.add(info.depth_view);
     destroy_queue.add(info.stencil_view);
+    info.depth_view = nullptr;
+    info.stencil_view = nullptr;
 
     destroy_framebuffers(info.texture.view);
     destroy_queue.add_image(info.texture);
@@ -1371,7 +1412,12 @@ ColorSurfaceCacheInfo *VKSurfaceCache::perform_surface_sync() {
         vkutil::Buffer &copy_buffer = *last_written_surface->copy_buffer;
 
         if (!copy_buffer.buffer) {
-            copy_buffer.size = last_written_surface->stride_bytes * last_written_surface->original_height;
+            // RGB24 is represented as four components on the GPU; the staging
+            // allocation must hold the GPU row, before swscale packs it to RGB.
+            const uint64_t row_bytes = format_need_additional_memory(last_written_surface->format)
+                ? (static_cast<uint64_t>(last_written_surface->stride_bytes) / 3) * 4
+                : last_written_surface->stride_bytes;
+            copy_buffer.size = row_bytes * last_written_surface->original_height;
             copy_buffer.init_buffer(vk::BufferUsageFlagBits::eTransferDst, vkutil::vma_mapped_alloc);
         }
 

@@ -222,3 +222,60 @@ settings, relaunch, Reset per-game settings, both real PUP packages, PKG/ZIP
 installation, and a second game launch after changing High accuracy. Host tests
 exercise copy/decryption, cache-index bounds and settings propagation with
 synthetic adapters; they do not replace an Xcode build or iPhone measurements.
+
+
+## Runtime memory controls and large imports
+
+`Settings → JIT & Memory` saves device-wide options in UserDefaults. Close and
+reopen the app after changing them. They are loaded before JIT prewarming and
+renderer creation; existing executable regions never change size mid-session.
+No rebuild is needed to change these options after installing this version.
+
+- **JIT cache per guest thread:** Automatic, 12, 16, 24 or 32 MiB. Automatic
+  chooses 12 MiB on known devices with at most 3 GiB RAM, otherwise 16 MiB.
+  This is translated-code capacity, not a RAM quota for the whole guest thread.
+  Smaller caches may recompile more often. Guest thread/core counts are not
+  overridden because game scheduling depends on them.
+- **Shader compiler threads:** Automatic or 1–4, capped to detected host cores.
+  This controls the Vulkan asynchronous compilation workers, not guest CPU
+  threads. With async compilation disabled it does not create background workers.
+- **Texture cache:** Automatic or 128/256/512 entries. Automatic uses 256 on
+  known <=3 GiB devices, 512 otherwise. Entries differ in byte size, so this is
+  not a total-RAM limit. Fewer entries can increase texture uploads/stutter.
+- **Trim oversized upload buffers:** enabled by default. Once the existing GPU
+  fence checks allow reuse, a buffer larger than 4 MiB can shrink if demand is
+  at most one quarter of its capacity and 120 frames have passed since resizing.
+  A 1 MiB floor on shrinking and the interval reduce allocation churn.
+- **iPhone 8 Plus preset:** 12 MiB JIT caches, one shader compiler, 256 textures,
+  buffer trimming, 0.5× resolution, CPU optimizations and shader caching enabled,
+  anisotropic filtering off, double buffering off. Accuracy and surface-sync
+  choices are retained. It is a starting point, not a measured FPS guarantee.
+
+Surface-cache eviction now retires the old readback/blit allocations and format
+conversion context as well as its image views. A FIFO barrier lets pending CPU
+readbacks finish before the slot is reused; GPU allocations still retire through
+the frame destruction queue. RGB24 readback reserves the four-component GPU row
+before packing it back to guest memory. Upload fence-age checks avoid unsigned
+underflow in the first frames of a game.
+
+The long-lived SDL library/game loops now bound Objective-C temporary objects
+with an autorelease pool per iteration. The nested UIKit run loop explicitly
+flushes pending layer transactions, including import completion and firmware
+readiness changes. These paths still require device verification for the reported
+background/foreground workaround.
+
+PKG progress at 80% marks the start of PFS decryption, which exposes no byte
+progress. The UI now names that stage instead of displaying a frozen percentage;
+it shows library indexing separately and only announces success after completion.
+Large games can spend minutes in that stage. Firmware setup shows independent
+system/font readiness, allows Back, and wraps the busy message. A version number
+alone does not unlock Next; the required partition must contain installed files.
+
+For a reproducible report, enable the FPS/RAM overlay, note the build commit,
+record the same gameplay scene at 1/5/10 minutes, then export `tsubomi.log`.
+While the overlay is visible it records a footprint/FPS sample every 30 seconds.
+Report PKG versus ZIP and the last install-stage message. The compact HUD option
+reduces readout size; its position remains editable in Virtual controls.
+Local host fixtures validate policies, resource retirement and installer/cache
+code. They do not measure Metal memory, Jetsam, SwiftUI updates, real PUP/PKG
+installation, or Attack on Titan 2 FPS on an iPhone.

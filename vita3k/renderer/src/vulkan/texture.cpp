@@ -25,6 +25,7 @@
 #include <gxm/types.h>
 #include <renderer/functions.h>
 #include <util/align.h>
+#include <util/ios_runtime_tuning.h>
 #include <vkutil/vkutil.h>
 
 namespace renderer::vulkan {
@@ -184,8 +185,9 @@ void VKTextureCache::prepare_staging_buffer(bool is_configure) {
     // if we are not using the previous buffer, we wait if the buffer was used at least once,
     // less than MAX_FRAMES_RENDERING frames ago and we have not yet waited for its fence
     const bool need_wait = !use_previous_buffer
-        && staging_buffer->frame_timestamp != ~0
-        && staging_buffer->frame_timestamp > context->frame_timestamp - MAX_FRAMES_RENDERING
+        && staging_buffer->frame_timestamp != std::numeric_limits<uint64_t>::max()
+        && (context->frame_timestamp < staging_buffer->frame_timestamp
+            || context->frame_timestamp - staging_buffer->frame_timestamp < MAX_FRAMES_RENDERING)
         && staging_buffer->scene_timestamp > last_waited_scene;
     const vk::Fence current_fence = context->next_fence;
 
@@ -241,12 +243,24 @@ void VKTextureCache::prepare_staging_buffer(bool is_configure) {
         staging_buffer->waiting_fence = current_fence;
         staging_buffer->used_so_far = 0;
 
-        if (staging_buffer->buffer.size < current_texture->memory_needed) {
-            // we need to create a bigger buffer
+        bool shrink_buffer = false;
+#ifdef VITA3K_PLATFORM_IOS
+        shrink_buffer = ios_runtime::tuning.trim_staging_buffers
+            && ios_runtime::shrink_staging(staging_buffer->buffer.size, current_texture->memory_needed,
+                context->frame_timestamp, staging_buffer->last_resize_frame);
+#endif
+        if (staging_buffer->buffer.size < current_texture->memory_needed || shrink_buffer) {
+            // Grow on demand, or release a large high-water allocation after
+            // the existing fence checks above prove this buffer is reusable.
             // destroy the previous one if there is, no need to defer destroy it as we know it is no longer being used
             staging_buffer->buffer.destroy();
 
             staging_buffer->buffer.size = current_texture->memory_needed;
+#ifdef VITA3K_PLATFORM_IOS
+            if (shrink_buffer)
+                staging_buffer->buffer.size = std::max<uint32_t>(current_texture->memory_needed, 1024 * 1024);
+#endif
+            staging_buffer->last_resize_frame = context->frame_timestamp;
             staging_buffer->buffer.init_buffer(vk::BufferUsageFlagBits::eTransferSrc, vkutil::vma_mapped_alloc);
         }
     }

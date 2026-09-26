@@ -1,3 +1,4 @@
+#include <util/ios_runtime_tuning.h>
 #include <atomic>
 #include <cassert>
 #include <cstring>
@@ -221,6 +222,11 @@ int main(int argc, char **argv) {
     assert(read(config_path) == "replacement");
     const std::string payload(200003, 'x');
     assert(compiler_workers() == 2);
+    ios_runtime::tuning.shader_workers = 1;
+    assert(compiler_workers() == 1);
+    ios_runtime::tuning.shader_workers = 4;
+    assert(compiler_workers() == 4);
+    ios_runtime::tuning.shader_workers = 0;
     fixture_cores = 2;
     assert(compiler_workers() == 1);
     fixture_cores = 6;

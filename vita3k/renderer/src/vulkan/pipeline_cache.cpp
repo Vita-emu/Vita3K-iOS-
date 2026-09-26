@@ -28,6 +28,7 @@
 #include <shader/spirv_recompiler.h>
 
 #include <util/fs.h>
+#include <util/ios_runtime_tuning.h>
 #include <util/log.h>
 
 #include <SDL3/SDL_cpuinfo.h>
@@ -248,6 +249,10 @@ void PipelineCache::init(bool support_rasterized_order_access) {
         nb_worker_threads = std::min(nb_worker_threads, 2);
     else
         nb_worker_threads = std::max(nb_worker_threads, 4);
+    const int requested_workers = ios_runtime::shader_workers(ios_runtime::tuning.shader_workers, nb_logical_threads);
+    if (requested_workers)
+        nb_worker_threads = requested_workers;
+    LOG_INFO("iOS shader compiler workers: {}", nb_worker_threads);
 #endif
 
     if (use_async_compilation) {

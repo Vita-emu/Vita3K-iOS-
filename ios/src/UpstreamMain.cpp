@@ -2105,7 +2105,12 @@ void start_import(EmuEnvState &emuenv, const std::string &path, const bool firmw
                     job->message = "PKG needs a matching license. Import its work.bin first, then select the .pkg again.";
                 } else {
                     job->success = install_pkg(fs::path(path), emuenv, zrif, [job](float percent) {
-                        job->progress.store(std::clamp(static_cast<int>(percent), 0, 100));
+                        // PKG's PFS phase reports only its start (80), with no
+                        // byte progress. Present it as an indeterminate stage.
+                        const int progress = percent >= 80 && percent < 100 ? -2
+                            : std::clamp(static_cast<int>(percent), 0, 100);
+                        if (job->progress.exchange(progress) != progress && progress == -2)
+                            LOG_INFO("iOS PKG: decrypting game data (PFS)");
                     });
                     job->message = job->success ? "PKG installed" : "PKG install failed (see tsubomi.log)";
                 }
@@ -2372,241 +2377,251 @@ std::optional<AppLaunchRequest> choose_boot_title(EmuEnvState &emuenv) {
     }
     vita3k_ios_show_library(games, native_settings(emuenv));
 
+    bool leave_library = false;
+    std::optional<AppLaunchRequest> launch_request;
     for (;;) {
-        SDL_Event event;
-        while (SDL_PollEvent(&event)) {
-            // Only a real OS termination leaves the library. SDL_EVENT_QUIT is
-            // how the in-game menu ends a session; a stray/duplicate one that
-            // survives session teardown must not silently tear down the whole
-            // frontend (the "black screen after quitting a game" failure: the
-            // outer loop broke, the window was destroyed, and the app idled
-            // with nothing on screen).
-            if (event.type == SDL_EVENT_TERMINATING) {
-                vita3k_ios_hide_library();
-                return std::nullopt;
-            }
-            if (event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED)
-                LOG_INFO("Ignoring quit-type SDL event {} while the library is on screen", event.type);
-        }
-
-        if (g_import_job && !g_import_job->done.load()) {
-            const int progress = g_import_job->progress.load();
-            if (progress >= 0 && progress != g_import_job->displayed_progress) {
-                g_import_job->displayed_progress = progress;
-                vita3k_ios_report_install_progress(progress);
-            }
-        }
-        if (g_import_job && g_import_job->done.load()) {
-            const bool was_firmware = g_import_job->firmware;
-            const bool apps_rescanned = g_import_job->apps_rescanned;
-            auto games_snapshot = std::move(g_import_job->games_snapshot);
-            const bool rescan_apps = g_import_job->rescan_apps;
-            const bool refresh_library = g_import_job->refresh_library;
-            const bool success = g_import_job->success;
-            const bool needs_attention = g_import_job->needs_attention;
-            const std::string message = g_import_job->message;
-            const std::string share_path = g_import_job->share_path;
-            const auto installed_applications = g_import_job->installed_applications;
-            g_import_job.reset();
-            if (rescan_apps && !was_firmware && !apps_rescanned && !app::scan_apps(emuenv))
-                LOG_ERROR("Failed to rescan apps list after import.");
-            if (rescan_apps || (success && refresh_library)) {
-                games = games_snapshot ? std::move(*games_snapshot) : native_games(emuenv);
-                vita3k_ios_update_library(games, native_settings(emuenv));
-            }
-            vita3k_ios_report_import_result(message, success, needs_attention);
-            if (!share_path.empty())
-                vita3k_ios_share_file(share_path);
-            if (success && rescan_apps && !was_firmware)
-                maybe_prompt_license_import(emuenv, installed_applications);
-        }
-
-        if (auto action = vita3k_ios_take_frontend_action()) {
-            switch (action->kind) {
-            case Vita3KIOSFrontendActionKind::Launch:
-                if (!firmware_setup_complete(emuenv)) {
-                    vita3k_ios_show_boot_error(
-                        "Install PSVUPDAT.PUP and the PSP2UPDAT.PUP font package before playing games.");
-                    break;
+        vita3k_ios_autorelease([&] {
+            SDL_Event event;
+            while (SDL_PollEvent(&event)) {
+                // Only a real OS termination leaves the library. SDL_EVENT_QUIT is
+                // how the in-game menu ends a session; a stray/duplicate one that
+                // survives session teardown must not silently tear down the whole
+                // frontend (the "black screen after quitting a game" failure: the
+                // outer loop broke, the window was destroyed, and the app idled
+                // with nothing on screen).
+                if (event.type == SDL_EVENT_TERMINATING) {
+                    vita3k_ios_hide_library();
+                    leave_library = true;
+                    return;
                 }
-                // Defense in depth: the library already refuses launches without
-                // JIT, but re-probe here so a debugger attached after the probe
-                // is honored and one attached-then-detached is caught.
-                if (!ios_jit_available()) {
-                    LOG_WARN("Refusing launch of '{}': JIT is not available for this process.",
-                        action->app_path);
-                    vita3k_ios_set_jit_available(false);
-                    break;
+                if (event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED)
+                    LOG_INFO("Ignoring quit-type SDL event {} while the library is on screen", event.type);
+            }
+
+            if (g_import_job && !g_import_job->done.load()) {
+                const int progress = g_import_job->progress.load();
+                if (progress != -1 && progress != g_import_job->displayed_progress) {
+                    g_import_job->displayed_progress = progress;
+                    vita3k_ios_report_install_progress(progress, g_import_job->firmware);
                 }
-                vita3k_ios_set_jit_available(true);
-                g_current_trophy_id.clear();
-                g_current_title.clear();
-                g_current_title_id.clear();
-                for (const auto &game : games) {
-                    if (game.app_path == action->app_path) {
-                        g_current_trophy_id = game.trophy_id;
-                        g_current_title = game.title;
-                        g_current_title_id = game.title_id;
+            }
+            if (g_import_job && g_import_job->done.load()) {
+                const bool was_firmware = g_import_job->firmware;
+                const bool apps_rescanned = g_import_job->apps_rescanned;
+                auto games_snapshot = std::move(g_import_job->games_snapshot);
+                const bool rescan_apps = g_import_job->rescan_apps;
+                const bool refresh_library = g_import_job->refresh_library;
+                const bool success = g_import_job->success;
+                const bool needs_attention = g_import_job->needs_attention;
+                const std::string message = g_import_job->message;
+                const std::string share_path = g_import_job->share_path;
+                const auto installed_applications = g_import_job->installed_applications;
+                g_import_job.reset();
+                if (rescan_apps && !was_firmware && !apps_rescanned && !app::scan_apps(emuenv))
+                    LOG_ERROR("Failed to rescan apps list after import.");
+                if (rescan_apps || (success && refresh_library)) {
+                    games = games_snapshot ? std::move(*games_snapshot) : native_games(emuenv);
+                    vita3k_ios_update_library(games, native_settings(emuenv));
+                }
+                vita3k_ios_report_import_result(message, success, needs_attention);
+                if (!share_path.empty())
+                    vita3k_ios_share_file(share_path);
+                if (success && rescan_apps && !was_firmware)
+                    maybe_prompt_license_import(emuenv, installed_applications);
+            }
+
+            if (auto action = vita3k_ios_take_frontend_action()) {
+                switch (action->kind) {
+                case Vita3KIOSFrontendActionKind::Launch:
+                    if (!firmware_setup_complete(emuenv)) {
+                        vita3k_ios_show_boot_error(
+                            "Install PSVUPDAT.PUP and the PSP2UPDAT.PUP font package before playing games.");
                         break;
                     }
-                }
-                LOG_INFO("Booting selected iOS library title: {}", action->app_path);
-                g_pending_game_settings = action->has_settings_override
-                    ? std::optional(action->settings)
-                    : std::nullopt;
-                vita3k_ios_hide_library();
-                return AppLaunchRequest{.app_path = action->app_path};
-            case Vita3KIOSFrontendActionKind::Refresh: {
-                LOG_INFO("Rescanning iOS game library");
-                const bool refreshed = app::init_apps_list(emuenv);
-                if (!refreshed)
-                    LOG_ERROR("Failed to rescan apps list.");
-                games = native_games(emuenv);
-                vita3k_ios_update_library(games, native_settings(emuenv));
-                vita3k_ios_report_library_refresh(refreshed);
-                break;
-            }
-            case Vita3KIOSFrontendActionKind::ApplySettings:
-                apply_native_settings(emuenv, action->settings);
-                vita3k_ios_update_library(games, native_settings(emuenv));
-                break;
-            case Vita3KIOSFrontendActionKind::ImportGame:
-                LOG_INFO("Importing game archive: {}", action->app_path);
-                start_import(emuenv, action->app_path, false);
-                break;
-            case Vita3KIOSFrontendActionKind::ImportFirmware:
-                LOG_INFO("Importing firmware PUP: {}", action->app_path);
-                start_import(emuenv, action->app_path, true);
-                break;
-            case Vita3KIOSFrontendActionKind::ImportLicense: {
-                LOG_INFO("Importing NoNpDrm work.bin license: {}", action->app_path);
-                const bool copied = copy_license(emuenv, fs::path(action->app_path));
-                // A NoNpDrm dump's ux0:app content is still PFS-encrypted on
-                // disk; copying the .rif alone leaves eboot.bin/PNGs encrypted
-                // (decrypt_fself fails, art won't decode). Decrypt the installed
-                // title in place with the work.bin, exactly like desktop.
-                bool decrypted = false;
-                if (copied && !emuenv.license_title_id.empty()) {
-                    const fs::path title_path = emuenv.vita_fs_path / "ux0/app" / emuenv.license_title_id;
-                    boost::system::error_code exists_error;
-                    if (fs::exists(title_path, exists_error) && !exists_error) {
-                        try {
-                            decrypted = decrypt_install_nonpdrm(emuenv, fs::path(action->app_path), title_path);
-                        } catch (const std::exception &error) {
-                            LOG_ERROR("NoNpDrm content decrypt failed: {}", error.what());
+                    // Defense in depth: the library already refuses launches without
+                    // JIT, but re-probe here so a debugger attached after the probe
+                    // is honored and one attached-then-detached is caught.
+                    if (!ios_jit_available()) {
+                        LOG_WARN("Refusing launch of '{}': JIT is not available for this process.",
+                            action->app_path);
+                        vita3k_ios_set_jit_available(false);
+                        break;
+                    }
+                    vita3k_ios_set_jit_available(true);
+                    g_current_trophy_id.clear();
+                    g_current_title.clear();
+                    g_current_title_id.clear();
+                    for (const auto &game : games) {
+                        if (game.app_path == action->app_path) {
+                            g_current_trophy_id = game.trophy_id;
+                            g_current_title = game.title;
+                            g_current_title_id = game.title_id;
+                            break;
                         }
                     }
-                }
-                boost::system::error_code cleanup_error;
-                fs::remove(fs::path(action->app_path), cleanup_error);
-                // Rescan so the (now decryptable) art and titles refresh without
-                // an app restart.
-                if (!app::init_apps_list(emuenv))
-                    LOG_ERROR("Failed to rescan apps after license import.");
-                games = native_games(emuenv);
-                vita3k_ios_update_library(games, native_settings(emuenv));
-                vita3k_ios_report_import_result(
-                    copied ? (decrypted ? "License installed; content decrypted"
-                                        : "License installed")
-                           : "License import failed (see tsubomi.log)", copied);
-                break;
-            }
-            case Vita3KIOSFrontendActionKind::ImportSave:
-                if (action->title_id.empty())
-                    start_all_saves_import(emuenv, action->app_path);
-                else
-                    start_save_import(emuenv, action->title_id, action->app_path);
-                break;
-            case Vita3KIOSFrontendActionKind::ExportSave:
-                if (action->title_id.empty())
-                    start_all_saves_export(emuenv);
-                else
-                    start_save_export(emuenv, action->title_id);
-                break;
-            case Vita3KIOSFrontendActionKind::ImportLibraryArchive:
-                start_library_archive_import(emuenv, action->app_path);
-                break;
-            case Vita3KIOSFrontendActionKind::ExportLibraryArchive:
-                start_library_archive_export(emuenv, {});
-                break;
-            case Vita3KIOSFrontendActionKind::ExportGameArchive:
-                start_library_archive_export(emuenv, action->title_id);
-                break;
-            case Vita3KIOSFrontendActionKind::ShowTrophies:
-                show_trophies(emuenv, action->trophy_id, action->title_id, action->app_path);
-                break;
-            case Vita3KIOSFrontendActionKind::SetTrophyState: {
-                const bool changed = safe_identifier(action->trophy_id)
-                    && np::trophy::set_trophy_earned(trophy_source(emuenv),
-                        action->trophy_id, action->trophy_entry_id,
-                        action->trophy_earned);
-                if (!changed) {
-                    vita3k_ios_report_import_result(
-                        "Trophy progress could not be changed", false);
+                    LOG_INFO("Booting selected iOS library title: {}", action->app_path);
+                    g_pending_game_settings = action->has_settings_override
+                        ? std::optional(action->settings)
+                        : std::nullopt;
+                    vita3k_ios_hide_library();
+                    launch_request = AppLaunchRequest{.app_path = action->app_path};
+                    leave_library = true;
+                    return;
+                case Vita3KIOSFrontendActionKind::Refresh: {
+                    LOG_INFO("Rescanning iOS game library");
+                    const bool refreshed = app::init_apps_list(emuenv);
+                    if (!refreshed)
+                        LOG_ERROR("Failed to rescan apps list.");
+                    games = native_games(emuenv);
+                    vita3k_ios_update_library(games, native_settings(emuenv));
+                    vita3k_ios_report_library_refresh(refreshed);
                     break;
                 }
-                const auto updated = load_trophies(
-                    emuenv, action->trophy_id, "Trophies", {});
-                vita3k_ios_update_trophies(updated);
-                games = native_games(emuenv);
-                vita3k_ios_update_library(games, native_settings(emuenv));
-                break;
-            }
-            case Vita3KIOSFrontendActionKind::DeleteGame: {
-                if (!safe_identifier(action->title_id, 16)) {
-                    vita3k_ios_report_import_result("Delete rejected an invalid title ID", false);
+                case Vita3KIOSFrontendActionKind::ApplySettings:
+                    apply_native_settings(emuenv, action->settings);
+                    vita3k_ios_update_library(games, native_settings(emuenv));
                     break;
-                }
-                LOG_INFO("Deleting installed title {} (app/patch/addcont)", action->title_id);
-                boost::system::error_code remove_error;
-                bool removed_any = false;
-                for (const char *content_root : { "ux0/app", "ux0/patch", "ux0/addcont" }) {
-                    const fs::path target = emuenv.vita_fs_path / content_root / action->title_id;
-                    boost::system::error_code exists_error;
-                    if (fs::exists(target, exists_error) && !exists_error) {
-                        fs::remove_all(target, remove_error);
-                        removed_any = removed_any || !remove_error;
+                case Vita3KIOSFrontendActionKind::ImportGame:
+                    LOG_INFO("Importing game archive: {}", action->app_path);
+                    start_import(emuenv, action->app_path, false);
+                    break;
+                case Vita3KIOSFrontendActionKind::ImportFirmware:
+                    LOG_INFO("Importing firmware PUP: {}", action->app_path);
+                    start_import(emuenv, action->app_path, true);
+                    break;
+                case Vita3KIOSFrontendActionKind::ImportLicense: {
+                    LOG_INFO("Importing NoNpDrm work.bin license: {}", action->app_path);
+                    const bool copied = copy_license(emuenv, fs::path(action->app_path));
+                    // A NoNpDrm dump's ux0:app content is still PFS-encrypted on
+                    // disk; copying the .rif alone leaves eboot.bin/PNGs encrypted
+                    // (decrypt_fself fails, art won't decode). Decrypt the installed
+                    // title in place with the work.bin, exactly like desktop.
+                    bool decrypted = false;
+                    if (copied && !emuenv.license_title_id.empty()) {
+                        const fs::path title_path = emuenv.vita_fs_path / "ux0/app" / emuenv.license_title_id;
+                        boost::system::error_code exists_error;
+                        if (fs::exists(title_path, exists_error) && !exists_error) {
+                            try {
+                                decrypted = decrypt_install_nonpdrm(emuenv, fs::path(action->app_path), title_path);
+                            } catch (const std::exception &error) {
+                                LOG_ERROR("NoNpDrm content decrypt failed: {}", error.what());
+                            }
+                        }
                     }
+                    boost::system::error_code cleanup_error;
+                    fs::remove(fs::path(action->app_path), cleanup_error);
+                    // Rescan so the (now decryptable) art and titles refresh without
+                    // an app restart.
+                    if (!app::init_apps_list(emuenv))
+                        LOG_ERROR("Failed to rescan apps after license import.");
+                    games = native_games(emuenv);
+                    vita3k_ios_update_library(games, native_settings(emuenv));
+                    vita3k_ios_report_import_result(
+                        copied ? (decrypted ? "License installed; content decrypted"
+                                            : "License installed")
+                               : "License import failed (see tsubomi.log)", copied);
+                    break;
                 }
-                if (!app::init_apps_list(emuenv))
-                    LOG_ERROR("Failed to rescan apps list after delete.");
-                games = native_games(emuenv);
-                vita3k_ios_update_library(games, native_settings(emuenv));
-                vita3k_ios_report_import_result(
-                    removed_any ? "Game deleted (saves and trophies kept)"
-                                : "Nothing to delete for " + action->title_id,
-                    removed_any);
-                break;
+                case Vita3KIOSFrontendActionKind::ImportSave:
+                    if (action->title_id.empty())
+                        start_all_saves_import(emuenv, action->app_path);
+                    else
+                        start_save_import(emuenv, action->title_id, action->app_path);
+                    break;
+                case Vita3KIOSFrontendActionKind::ExportSave:
+                    if (action->title_id.empty())
+                        start_all_saves_export(emuenv);
+                    else
+                        start_save_export(emuenv, action->title_id);
+                    break;
+                case Vita3KIOSFrontendActionKind::ImportLibraryArchive:
+                    start_library_archive_import(emuenv, action->app_path);
+                    break;
+                case Vita3KIOSFrontendActionKind::ExportLibraryArchive:
+                    start_library_archive_export(emuenv, {});
+                    break;
+                case Vita3KIOSFrontendActionKind::ExportGameArchive:
+                    start_library_archive_export(emuenv, action->title_id);
+                    break;
+                case Vita3KIOSFrontendActionKind::ShowTrophies:
+                    show_trophies(emuenv, action->trophy_id, action->title_id, action->app_path);
+                    break;
+                case Vita3KIOSFrontendActionKind::SetTrophyState: {
+                    const bool changed = safe_identifier(action->trophy_id)
+                        && np::trophy::set_trophy_earned(trophy_source(emuenv),
+                            action->trophy_id, action->trophy_entry_id,
+                            action->trophy_earned);
+                    if (!changed) {
+                        vita3k_ios_report_import_result(
+                            "Trophy progress could not be changed", false);
+                        break;
+                    }
+                    const auto updated = load_trophies(
+                        emuenv, action->trophy_id, "Trophies", {});
+                    vita3k_ios_update_trophies(updated);
+                    games = native_games(emuenv);
+                    vita3k_ios_update_library(games, native_settings(emuenv));
+                    break;
+                }
+                case Vita3KIOSFrontendActionKind::DeleteGame: {
+                    if (!safe_identifier(action->title_id, 16)) {
+                        vita3k_ios_report_import_result("Delete rejected an invalid title ID", false);
+                        break;
+                    }
+                    LOG_INFO("Deleting installed title {} (app/patch/addcont)", action->title_id);
+                    boost::system::error_code remove_error;
+                    bool removed_any = false;
+                    for (const char *content_root : { "ux0/app", "ux0/patch", "ux0/addcont" }) {
+                        const fs::path target = emuenv.vita_fs_path / content_root / action->title_id;
+                        boost::system::error_code exists_error;
+                        if (fs::exists(target, exists_error) && !exists_error) {
+                            fs::remove_all(target, remove_error);
+                            removed_any = removed_any || !remove_error;
+                        }
+                    }
+                    if (!app::init_apps_list(emuenv))
+                        LOG_ERROR("Failed to rescan apps list after delete.");
+                    games = native_games(emuenv);
+                    vita3k_ios_update_library(games, native_settings(emuenv));
+                    vita3k_ios_report_import_result(
+                        removed_any ? "Game deleted (saves and trophies kept)"
+                                    : "Nothing to delete for " + action->title_id,
+                        removed_any);
+                    break;
+                }
+                case Vita3KIOSFrontendActionKind::Quit:
+                    vita3k_ios_hide_library();
+                    leave_library = true;
+                    return;
+                }
             }
-            case Vita3KIOSFrontendActionKind::Quit:
-                vita3k_ios_hide_library();
-                return std::nullopt;
-            }
-        }
 
-        // Re-probe JIT roughly once a second so the banner clears live if the
-        // user attaches StikDebug while the library is on screen.
-        {
-            static Uint64 last_jit_probe_ms = 0;
-            const Uint64 now_ms = SDL_GetTicks();
-            if (now_ms - last_jit_probe_ms >= 1000) {
-                last_jit_probe_ms = now_ms;
-                vita3k_ios_set_jit_available(ios_jit_available());
+            // Re-probe JIT roughly once a second so the banner clears live if the
+            // user attaches StikDebug while the library is on screen.
+            {
+                static Uint64 last_jit_probe_ms = 0;
+                const Uint64 now_ms = SDL_GetTicks();
+                if (now_ms - last_jit_probe_ms >= 1000) {
+                    last_jit_probe_ms = now_ms;
+                    vita3k_ios_set_jit_available(ios_jit_available());
+                }
             }
-        }
 
-        // Service UIKit instead of a blind sleep so library scrolling and the
-        // settings sliders stay smooth on this SDL/UIKit-owning thread.
-        //
-        // The interval is *not* a frame budget: CFRunLoopRunInMode services
-        // every UIKit input source, timer and display-link callback inside the
-        // window, so scrolling runs at full rate regardless. All it sets is how
-        // often we come back to poll SDL, which on the library screen only
-        // needs to notice a termination event. It used to be 16 ms, which woke
-        // the CPU 62 times a second for the entire time the user sat browsing
-        // a static list — pure idle drain. 50 ms cuts that by 4x with no
-        // perceptible change in responsiveness.
-        vita3k_ios_pump_runloop(0.05);
+            // Service UIKit instead of a blind sleep so library scrolling and the
+            // settings sliders stay smooth on this SDL/UIKit-owning thread.
+            //
+            // The interval is *not* a frame budget: CFRunLoopRunInMode services
+            // every UIKit input source, timer and display-link callback inside the
+            // window, so scrolling runs at full rate regardless. All it sets is how
+            // often we come back to poll SDL, which on the library screen only
+            // needs to notice a termination event. It used to be 16 ms, which woke
+            // the CPU 62 times a second for the entire time the user sat browsing
+            // a static list — pure idle drain. 50 ms cuts that by 4x with no
+            // perceptible change in responsiveness.
+            vita3k_ios_pump_runloop(0.05);
+        });
+        if (leave_library)
+            return launch_request;
     }
 }
 
@@ -2831,6 +2846,7 @@ bool prepare_ios_jit_pool() {
 } // namespace
 
 int main(int argc, char *argv[]) {
+    vita3k_ios_load_runtime_preferences();
     Root root_paths;
     std::unique_ptr<EmuEnvState> emuenv;
 
@@ -3091,136 +3107,138 @@ int main(int argc, char *argv[]) {
     IOSInputSession text_input;
     bool running = true;
     while (running) {
-        SDL_Event event;
-        while (SDL_PollEvent(&event)) {
-            switch (event.type) {
-            case SDL_EVENT_TERMINATING:
-                app_terminating = true;
-                running = false;
-                break;
+        vita3k_ios_autorelease([&] {
+            SDL_Event event;
+            while (SDL_PollEvent(&event)) {
+                switch (event.type) {
+                case SDL_EVENT_TERMINATING:
+                    app_terminating = true;
+                    running = false;
+                    break;
 
-            case SDL_EVENT_QUIT:
-            case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
-                // In-game menu "Quit Game" pushes SDL_EVENT_QUIT: end the
-                // session and fall back to the library.
-                running = false;
-                break;
+                case SDL_EVENT_QUIT:
+                case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
+                    // In-game menu "Quit Game" pushes SDL_EVENT_QUIT: end the
+                    // session and fall back to the library.
+                    running = false;
+                    break;
 
-            case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
-            case SDL_EVENT_WINDOW_RESIZED: {
-                int drawable_width = 0;
-                int drawable_height = 0;
-                SDL_GetWindowSizeInPixels(window, &drawable_width, &drawable_height);
-                LOG_INFO("iOS window resized: drawable={}x{} layout={}",
-                    drawable_width, drawable_height,
-                    drawable_height > drawable_width ? "portrait" : "landscape");
-                // MoltenVK does not reliably report the swapchain as
-                // out-of-date after a rotation; it scales the stale-extent
-                // swapchain to the layer instead (nearest-filtered, visibly
-                // pixelated). Force a rebuild at the new drawable size.
-                if (emuenv->renderer)
-                    emuenv->renderer->request_screen_rebuild();
-                break;
-            }
-
-            case SDL_EVENT_FINGER_DOWN:
-            case SDL_EVENT_FINGER_MOTION:
-            case SDL_EVENT_FINGER_UP: {
-                if (!vita3k_ios_vita_touchscreen_enabled()) {
-                    // The dynamic joystick owns the whole screen, so the
-                    // overlay normally swallows these before SDL ever sees
-                    // them. One can still arrive from a finger that was
-                    // already down when the mode changed, or from outside the
-                    // overlay's bounds; drop it, and drop any contact the
-                    // guest is still holding, so the panel reads as untouched.
-                    if (emuenv->touch.finger_count != 0)
-                        emuenv->touch.finger_count = 0;
+                case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+                case SDL_EVENT_WINDOW_RESIZED: {
+                    int drawable_width = 0;
+                    int drawable_height = 0;
+                    SDL_GetWindowSizeInPixels(window, &drawable_width, &drawable_height);
+                    LOG_INFO("iOS window resized: drawable={}x{} layout={}",
+                        drawable_width, drawable_height,
+                        drawable_height > drawable_width ? "portrait" : "landscape");
+                    // MoltenVK does not reliably report the swapchain as
+                    // out-of-date after a rotation; it scales the stale-extent
+                    // swapchain to the layer instead (nearest-filtered, visibly
+                    // pixelated). Force a rebuild at the new drawable size.
+                    if (emuenv->renderer)
+                        emuenv->renderer->request_screen_rebuild();
                     break;
                 }
-                handle_touch_event(emuenv->touch, event.tfinger);
-                if (event.type != SDL_EVENT_FINGER_MOTION) {
-                    LOG_DEBUG("iOS Vita touch {}: finger={} x={:.4f} y={:.4f} active={}",
-                        event.type == SDL_EVENT_FINGER_DOWN ? "down" : "up",
-                        static_cast<std::uint64_t>(event.tfinger.fingerID),
-                        event.tfinger.x, event.tfinger.y,
-                        static_cast<unsigned>(emuenv->touch.finger_count));
+
+                case SDL_EVENT_FINGER_DOWN:
+                case SDL_EVENT_FINGER_MOTION:
+                case SDL_EVENT_FINGER_UP: {
+                    if (!vita3k_ios_vita_touchscreen_enabled()) {
+                        // The dynamic joystick owns the whole screen, so the
+                        // overlay normally swallows these before SDL ever sees
+                        // them. One can still arrive from a finger that was
+                        // already down when the mode changed, or from outside the
+                        // overlay's bounds; drop it, and drop any contact the
+                        // guest is still holding, so the panel reads as untouched.
+                        if (emuenv->touch.finger_count != 0)
+                            emuenv->touch.finger_count = 0;
+                        break;
+                    }
+                    handle_touch_event(emuenv->touch, event.tfinger);
+                    if (event.type != SDL_EVENT_FINGER_MOTION) {
+                        LOG_DEBUG("iOS Vita touch {}: finger={} x={:.4f} y={:.4f} active={}",
+                            event.type == SDL_EVENT_FINGER_DOWN ? "down" : "up",
+                            static_cast<std::uint64_t>(event.tfinger.fingerID),
+                            event.tfinger.x, event.tfinger.y,
+                            static_cast<unsigned>(emuenv->touch.finger_count));
+                    }
+                    auto &mouse = emuenv->ctrl.overlay_mouse;
+                    mouse.x.store(event.tfinger.x * 960.f, std::memory_order_relaxed);
+                    mouse.y.store(event.tfinger.y * 544.f, std::memory_order_relaxed);
+                    mouse.pressed.store(event.type != SDL_EVENT_FINGER_UP, std::memory_order_relaxed);
+                    break;
                 }
-                auto &mouse = emuenv->ctrl.overlay_mouse;
-                mouse.x.store(event.tfinger.x * 960.f, std::memory_order_relaxed);
-                mouse.y.store(event.tfinger.y * 544.f, std::memory_order_relaxed);
-                mouse.pressed.store(event.type != SDL_EVENT_FINGER_UP, std::memory_order_relaxed);
-                break;
+
+                case SDL_EVENT_GAMEPAD_ADDED:
+                case SDL_EVENT_GAMEPAD_REMOVED:
+                    refresh_controllers(emuenv->ctrl, *emuenv);
+                    vita3k_ios_set_physical_controller_connected(has_physical_controller(emuenv->ctrl));
+                    LOG_INFO("iOS controller refresh: {} connected controller(s)", emuenv->ctrl.controllers_num);
+                    break;
+
+                case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
+                    // Vita inputs are polled from SDL by sceCtrl; this breadcrumb
+                    // proves the host controller event reached the iOS frontend.
+                    LOG_DEBUG("iOS gamepad button down: gamepad={} button={}",
+                        event.gbutton.which, static_cast<int>(event.gbutton.button));
+                    break;
+
+                case SDL_EVENT_GAMEPAD_TOUCHPAD_DOWN:
+                case SDL_EVENT_GAMEPAD_TOUCHPAD_MOTION:
+                case SDL_EVENT_GAMEPAD_TOUCHPAD_UP:
+                    handle_touchpad_event(emuenv->touch, event.gtouchpad);
+                    break;
+
+                default:
+                    break;
+                }
             }
 
-            case SDL_EVENT_GAMEPAD_ADDED:
-            case SDL_EVENT_GAMEPAD_REMOVED:
-                refresh_controllers(emuenv->ctrl, *emuenv);
-                vita3k_ios_set_physical_controller_connected(has_physical_controller(emuenv->ctrl));
-                LOG_INFO("iOS controller refresh: {} connected controller(s)", emuenv->ctrl.controllers_num);
-                break;
-
-            case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
-                // Vita inputs are polled from SDL by sceCtrl; this breadcrumb
-                // proves the host controller event reached the iOS frontend.
-                LOG_DEBUG("iOS gamepad button down: gamepad={} button={}",
-                    event.gbutton.which, static_cast<int>(event.gbutton.button));
-                break;
-
-            case SDL_EVENT_GAMEPAD_TOUCHPAD_DOWN:
-            case SDL_EVENT_GAMEPAD_TOUCHPAD_MOTION:
-            case SDL_EVENT_GAMEPAD_TOUCHPAD_UP:
-                handle_touchpad_event(emuenv->touch, event.gtouchpad);
-                break;
-
-            default:
-                break;
+            {
+                const Uint64 now_ms = SDL_GetTicks();
+                if (now_ms - perf_last_ms >= 1000) {
+                    const std::size_t frames = emuenv->frame_count;
+                    const float fps = static_cast<float>(frames - perf_last_frame_count) * 1000.0f
+                        / static_cast<float>(now_ms - perf_last_ms);
+                    perf_last_frame_count = frames;
+                    perf_last_ms = now_ms;
+                    const float frametime_ms = fps > 0.01f ? 1000.0f / fps : 0.0f;
+                    vita3k_ios_update_perf_overlay(fps, frametime_ms);
+                }
+                // Persist progress periodically, not only on a clean in-app quit.
+                // iOS users commonly terminate a stalled title from the app
+                // switcher, which previously discarded the whole session length.
+                // Every minute: the worst case is a minute of playtime lost to a
+                // force-quit, against half as many flash writes as a thirty-second
+                // checkpoint across a long session.
+                if (now_ms - playtime_checkpoint_ms >= 60000) {
+                    app::update_app_time_used(*emuenv, emuenv->io.app_path);
+                    playtime_checkpoint_ms = now_ms;
+                }
             }
-        }
 
-        {
-            const Uint64 now_ms = SDL_GetTicks();
-            if (now_ms - perf_last_ms >= 1000) {
-                const std::size_t frames = emuenv->frame_count;
-                const float fps = static_cast<float>(frames - perf_last_frame_count) * 1000.0f
-                    / static_cast<float>(now_ms - perf_last_ms);
-                perf_last_frame_count = frames;
-                perf_last_ms = now_ms;
-                const float frametime_ms = fps > 0.01f ? 1000.0f / fps : 0.0f;
-                vita3k_ios_update_perf_overlay(fps, frametime_ms);
+            if (auto action = vita3k_ios_take_frontend_action()) {
+                if (action->kind == Vita3KIOSFrontendActionKind::ShowTrophies)
+                    show_trophies(*emuenv, g_current_trophy_id, g_current_title,
+                        g_current_title_id, false);
             }
-            // Persist progress periodically, not only on a clean in-app quit.
-            // iOS users commonly terminate a stalled title from the app
-            // switcher, which previously discarded the whole session length.
-            // Every minute: the worst case is a minute of playtime lost to a
-            // force-quit, against half as many flash writes as a thirty-second
-            // checkpoint across a long session.
-            if (now_ms - playtime_checkpoint_ms >= 60000) {
-                app::update_app_time_used(*emuenv, emuenv->io.app_path);
-                playtime_checkpoint_ms = now_ms;
+
+            if (auto request = emuenv->take_app_launch_request()) {
+                // In-process relaunch (LoadExec) is not supported yet on iOS.
+                LOG_WARN("Title requested relaunch of '{}'; stopping instead.", request->self_path);
+                running = false;
             }
-        }
 
-        if (auto action = vita3k_ios_take_frontend_action()) {
-            if (action->kind == Vita3KIOSFrontendActionKind::ShowTrophies)
-                show_trophies(*emuenv, g_current_trophy_id, g_current_title,
-                    g_current_title_id, false);
-        }
+            if (!session_controller.is_running())
+                running = false;
 
-        if (auto request = emuenv->take_app_launch_request()) {
-            // In-process relaunch (LoadExec) is not supported yet on iOS.
-            LOG_WARN("Title requested relaunch of '{}'; stopping instead.", request->self_path);
-            running = false;
-        }
+            text_input.update(*emuenv);
 
-        if (!session_controller.is_running())
-            running = false;
-
-        text_input.update(*emuenv);
-
-        // Service UIKit (virtual controller, in-game glass menu, perf overlay)
-        // instead of a blind sleep so touch controls stay responsive.
-        if (running)
-            vita3k_ios_pump_runloop(0.016);
+            // Service UIKit (virtual controller, in-game glass menu, perf overlay)
+            // instead of a blind sleep so touch controls stay responsive.
+            if (running)
+                vita3k_ios_pump_runloop(0.016);
+        });
     }
 
     vita3k_ios_update_text_input(std::nullopt);

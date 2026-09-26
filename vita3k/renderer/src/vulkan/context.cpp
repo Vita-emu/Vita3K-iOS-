@@ -109,6 +109,11 @@ void VKContext::wait_thread_function(const MemState &mem) {
 
                            state.surface_cache.perform_post_surface_sync(mem, request.cache_info);
                        },
+                       [&](SurfaceReadbackBarrierRequest &request) {
+                           // FIFO ordering: all previous PostSurfaceSyncRequest
+                           // CPU copies have returned before a cache slot is reused.
+                           request.completed->set_value();
+                       },
                        [&](SyncSignalRequest &request) {
                            wait_for_fences();
 

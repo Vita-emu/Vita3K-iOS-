@@ -6,6 +6,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -173,6 +174,12 @@ void vita3k_ios_prompt_license_import(const std::string &title_id);
 // smooth while the SDL/UIKit thread is also polling emulator state.
 void vita3k_ios_pump_runloop(double seconds);
 
+// Bound UIKit/Swift bridge temporaries to one iteration of the long-lived SDL loop.
+void vita3k_ios_autorelease(const std::function<void()> &body);
+
+// Read persisted tuning once, before any JIT pool or renderer is created.
+void vita3k_ios_load_runtime_preferences();
+
 // Configures and activates an AVAudioSession (Playback) before SDL opens the
 // audio device. Without an active session iOS may not run the audio unit, so
 // the SDL stream never drains and games that gate on audio playback (movie
@@ -216,4 +223,4 @@ void vita3k_ios_show_boot_error(const std::string &message);
 std::vector<std::string> vita3k_ios_recent_log_lines();
 
 // Progress snapshots are polled by the library loop, never per-file UI callbacks.
-void vita3k_ios_report_install_progress(int percent);
+void vita3k_ios_report_install_progress(int percent, bool firmware);

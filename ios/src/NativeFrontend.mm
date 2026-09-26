@@ -3,6 +3,7 @@
 
 #include <vita3k_ios/NativeFrontend.h>
 #include <vita3k_ios/VirtualController.h>
+#include <util/ios_runtime_tuning.h>
 #include <util/log.h>
 
 // Apple's MacTypes.h declares `typedef char *Ptr;`, which collides with the
@@ -436,10 +437,13 @@ void invalidate_orientation_policy(UIViewController *controller) {
 }
 
 void perform_on_main(dispatch_block_t block) {
-    if (NSThread.isMainThread)
-        block();
-    else
-        dispatch_async(dispatch_get_main_queue(), block);
+    if (NSThread.isMainThread) {
+        @autoreleasepool { block(); }
+    } else {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            @autoreleasepool { block(); }
+        });
+    }
 }
 
 void present_alert(NSString *title, NSString *message) {
@@ -1773,6 +1777,15 @@ void vita3k_ios_update_perf_overlay(const float guest_fps, const float frametime
                 reinterpret_cast<task_info_t>(&vm_info), &count) == KERN_SUCCESS)
             memoryMB = vm_info.phys_footprint / (1024.0 * 1024.0);
 
+        // Sparse samples make a growing footprint diagnosable after boot
+        // diagnostics retire, without per-frame logging or extra timers.
+        static CFAbsoluteTime lastMemoryLog = 0;
+        const CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+        if (now - lastMemoryLog >= 30) {
+            lastMemoryLog = now;
+            LOG_INFO("iOS memory sample: footprint={:.0f} MiB, fps={:.1f}, frametime={:.1f} ms", memoryMB, fps, ft);
+        }
+
         UIDevice *device = UIDevice.currentDevice;
         if (!device.batteryMonitoringEnabled)
             device.batteryMonitoringEnabled = YES;
@@ -1917,6 +1930,21 @@ void vita3k_ios_configure_audio_session() {
     }
 }
 
+void vita3k_ios_autorelease(const std::function<void()> &body) {
+    @autoreleasepool { body(); }
+}
+
+void vita3k_ios_load_runtime_preferences() {
+    @autoreleasepool {
+        NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+        ios_runtime::tuning.jit_cache_mib = static_cast<int>([defaults integerForKey:@"tsubomi.jitCacheMiB"]);
+        ios_runtime::tuning.shader_workers = static_cast<int>([defaults integerForKey:@"tsubomi.shaderWorkers"]);
+        ios_runtime::tuning.texture_entries = static_cast<int>([defaults integerForKey:@"tsubomi.textureCacheEntries"]);
+        ios_runtime::tuning.trim_staging_buffers = [defaults objectForKey:@"tsubomi.trimStagingBuffers"] == nil
+            || [defaults boolForKey:@"tsubomi.trimStagingBuffers"];
+    }
+}
+
 void vita3k_ios_pump_runloop(const double seconds) {
     // On the main thread (where SDL runs main() on iOS) the run loop owns the
     // UIKit event/timer sources, so running it for `seconds` keeps scrolling,
@@ -1925,10 +1953,17 @@ void vita3k_ios_pump_runloop(const double seconds) {
     // interval rather than spinning after each event. Off the main thread the
     // run loop has no sources and would return instantly, so sleep instead to
     // avoid a busy loop.
-    if (NSThread.isMainThread)
-        CFRunLoopRunInMode(kCFRunLoopDefaultMode, seconds, false);
-    else
-        [NSThread sleepForTimeInterval:seconds];
+    @autoreleasepool {
+        if (NSThread.isMainThread) {
+            CFRunLoopRunInMode(kCFRunLoopDefaultMode, seconds, false);
+            // SDL's main() stays inside UIKit's outer run loop. Explicitly
+            // publish pending layer changes from this nested loop, including
+            // a completed import / firmware gate, without a scene transition.
+            [CATransaction flush];
+        } else {
+            [NSThread sleepForTimeInterval:seconds];
+        }
+    }
 }
 
 void vita3k_ios_report_settings_result(const std::vector<std::string> &restart_required) {
@@ -1949,10 +1984,11 @@ void vita3k_ios_report_settings_result(const std::vector<std::string> &restart_r
     });
 }
 
-void vita3k_ios_report_install_progress(int percent) {
+void vita3k_ios_report_install_progress(int percent, bool firmware) {
     perform_on_main(^{
-        NSString *message = percent > 100 ? @"Updating game library…"
-            : [NSString stringWithFormat:@"Installing… %d%%", percent];
+        NSString *message = percent == -2 ? @"Decrypting game data… Large games can take several minutes."
+            : percent > 100 ? @"Updating game library…"
+            : [NSString stringWithFormat:firmware ? @"Installing firmware package… %d%%" : @"Extracting game files… %d%%", percent];
         [TsubomiLibraryStateBridge setBusyMessage:message];
     });
 }

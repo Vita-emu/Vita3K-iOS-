@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Mandatory first-run flow: five forward-only pages, two of which gate on an
+/// Mandatory first-run flow: five pages, two of which gate on an
 /// official firmware package actually being installed.
 ///
 /// The UIKit version carried ~250 lines of constraint work to keep the card
@@ -101,8 +101,7 @@ struct OnboardingView: View {
         .padding(.bottom, isCompact ? 16 : 32)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(.systemBackground).ignoresSafeArea())
-        // Forward-only: there is no back affordance, and the flow cannot be
-        // dismissed interactively.
+        // Setup can be revisited with Back but cannot be dismissed until ready.
         .interactiveDismissDisabled()
     }
 
@@ -119,7 +118,7 @@ struct OnboardingView: View {
             }
 
             Text(page.title)
-                .font(isCompact ? .title2 : .largeTitle)
+                .font(isCompact ? .title2 : .title)
                 .fontWeight(.bold)
                 .multilineTextAlignment(.center)
 
@@ -137,6 +136,24 @@ struct OnboardingView: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
+            }
+
+            if page.requirement != nil {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label(firmware.mainFirmwareReady ? "System firmware: Installed" : "System firmware: Not installed",
+                          systemImage: firmware.mainFirmwareReady ? "checkmark.circle.fill" : "circle")
+                    Label(firmware.fontPackageReady ? "Fonts: Installed" : "Fonts: Not installed",
+                          systemImage: firmware.fontPackageReady ? "checkmark.circle.fill" : "circle")
+                }
+                .font(.footnote)
+                if !requirementSatisfied && installProgress == nil {
+                    Text(page.requirement == .mainFirmware
+                         ? "Next unlocks when system firmware files have been installed. A version number alone does not confirm installation."
+                         : "Next unlocks when the font package has been installed.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
             }
 
             if page.requirement != nil, let status = library.statusMessage {
@@ -177,6 +194,8 @@ struct OnboardingView: View {
                     ProgressView()
                     Text(installProgress)
                         .font(.subheadline)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 12)
@@ -228,6 +247,10 @@ struct OnboardingView: View {
                     .disabled(true)
             }
 
+            if pageIndex > 0 {
+                Button("Back") { pageIndex -= 1 }
+                    .disabled(installProgress != nil)
+            }
             progressDots
         }
         .controlSize(.large)

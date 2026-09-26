@@ -19,6 +19,7 @@
 #include <cpu/impl/dynarmic_cpu.h>
 #include <cpu/ios_jit_policy.h>
 #include <cpu/state.h>
+#include <util/ios_runtime_tuning.h>
 #include <util/log.h>
 
 #include <mem/ptr.h>
@@ -50,7 +51,9 @@ std::size_t ios_jit_code_cache_size() {
             || size != sizeof(physical_memory))
             physical_memory = 0;
 #endif
-        const std::size_t selected = ios_jit_cache_size_for_memory(physical_memory);
+        const int requested = ios_runtime::jit_cache_mib(ios_runtime::tuning.jit_cache_mib);
+        const std::size_t selected = requested ? static_cast<std::size_t>(requested) * 1024 * 1024
+                                               : ios_jit_cache_size_for_memory(physical_memory);
         LOG_INFO("iOS JIT cache budget: {} MiB per thread (physical memory: {} MiB; 0 = unknown)",
             selected / (1024 * 1024), physical_memory / (1024 * 1024));
         return selected;
