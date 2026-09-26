@@ -1,5 +1,5 @@
 diff --git a/externals/oaknut/include/oaknut/code_block.hpp b/externals/oaknut/include/oaknut/code_block.hpp
-index bfa87d96..0314a4fb 100644
+index bfa87d96..ae14335e 100644
 --- a/externals/oaknut/include/oaknut/code_block.hpp
 +++ b/externals/oaknut/include/oaknut/code_block.hpp
 @@ -4,9 +4,13 @@
@@ -249,7 +249,7 @@ index bfa87d96..0314a4fb 100644
  #    else
          m_memory = (std::uint32_t*)mmap(nullptr, size, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_ANON | MAP_PRIVATE | MAP_JIT, -1, 0);
  #    endif
-@@ -56,6 +266,16 @@ public:
+@@ -56,6 +268,16 @@ public:
  #if defined(_WIN32)
          VirtualFree((void*)m_memory, 0, MEM_RELEASE);
  #else
@@ -266,7 +266,7 @@ index bfa87d96..0314a4fb 100644
          munmap(m_memory, m_size);
  #endif
      }
-@@ -70,10 +290,27 @@ public:
+@@ -70,10 +292,27 @@ public:
          return m_memory;
      }
  
@@ -294,7 +294,7 @@ index bfa87d96..0314a4fb 100644
  #elif defined(__APPLE__) || defined(__NetBSD__) || defined(__OpenBSD__)
          mprotect(m_memory, m_size, PROT_READ | PROT_EXEC);
  #endif
-@@ -83,6 +320,9 @@ public:
+@@ -83,6 +322,9 @@ public:
      {
  #if defined(__APPLE__) && !TARGET_OS_IPHONE
          pthread_jit_write_protect_np(0);
@@ -304,7 +304,7 @@ index bfa87d96..0314a4fb 100644
  #elif defined(__APPLE__) || defined(__NetBSD__) || defined(__OpenBSD__)
          mprotect(m_memory, m_size, PROT_READ | PROT_WRITE);
  #endif
-@@ -137,6 +377,10 @@ public:
+@@ -137,6 +379,10 @@ public:
  
  protected:
      std::uint32_t* m_memory;
@@ -315,6 +315,76 @@ index bfa87d96..0314a4fb 100644
      std::size_t m_size = 0;
  };
  
+diff --git a/src/dynarmic/backend/arm64/a32_address_space.cpp b/src/dynarmic/backend/arm64/a32_address_space.cpp
+index bbdf925f..7c2804a3 100644
+--- a/src/dynarmic/backend/arm64/a32_address_space.cpp
++++ b/src/dynarmic/backend/arm64/a32_address_space.cpp
+@@ -181,6 +181,13 @@ IR::Block A32AddressSpace::GenerateIR(IR::LocationDescriptor descriptor) const {
+     return ir_block;
+ }
+ 
++void A32AddressSpace::ClearCache() {
++    AddressSpace::ClearCache();
++    // Range metadata belongs to the discarded code too. Smaller code caches
++    // otherwise keep accumulating interval nodes over repeated cache resets.
++    block_ranges.ClearCache();
++}
++
+ void A32AddressSpace::InvalidateCacheRanges(const boost::icl::interval_set<u32>& ranges) {
+     InvalidateBasicBlocks(block_ranges.InvalidateRanges(ranges));
+ }
+@@ -361,6 +368,9 @@ void A32AddressSpace::EmitPrelude() {
+     code.dx(mcl::bit_cast<u64>(prelude_info.return_to_dispatcher));
+ 
+     prelude_info.end_of_prelude = code.offset();
++    // Preserve the same emission headroom used by AddressSpace::Emit, even
++    // when the frontend selects a small per-thread code cache.
++    ASSERT_MSG(GetRemainingSize() >= 1024 * 1024, "JIT cache cannot fit the prelude and emission reserve");
+ 
+     mem.invalidate_all();
+     ProtectCodeMemory();
+diff --git a/src/dynarmic/backend/arm64/a32_address_space.h b/src/dynarmic/backend/arm64/a32_address_space.h
+index 3b9e9fb2..f003ebdb 100644
+--- a/src/dynarmic/backend/arm64/a32_address_space.h
++++ b/src/dynarmic/backend/arm64/a32_address_space.h
+@@ -19,6 +19,8 @@ public:
+ 
+     IR::Block GenerateIR(IR::LocationDescriptor) const override;
+ 
++    void ClearCache() override;
++
+     void InvalidateCacheRanges(const boost::icl::interval_set<u32>& ranges);
+ 
+ protected:
+diff --git a/src/dynarmic/backend/arm64/a64_address_space.cpp b/src/dynarmic/backend/arm64/a64_address_space.cpp
+index d4fe9a9c..66508b7f 100644
+--- a/src/dynarmic/backend/arm64/a64_address_space.cpp
++++ b/src/dynarmic/backend/arm64/a64_address_space.cpp
+@@ -350,6 +350,11 @@ IR::Block A64AddressSpace::GenerateIR(IR::LocationDescriptor descriptor) const {
+     return ir_block;
+ }
+ 
++void A64AddressSpace::ClearCache() {
++    AddressSpace::ClearCache();
++    block_ranges.ClearCache();
++}
++
+ void A64AddressSpace::InvalidateCacheRanges(const boost::icl::interval_set<u64>& ranges) {
+     InvalidateBasicBlocks(block_ranges.InvalidateRanges(ranges));
+ }
+diff --git a/src/dynarmic/backend/arm64/a64_address_space.h b/src/dynarmic/backend/arm64/a64_address_space.h
+index 86eae4dd..9ed6ab67 100644
+--- a/src/dynarmic/backend/arm64/a64_address_space.h
++++ b/src/dynarmic/backend/arm64/a64_address_space.h
+@@ -19,6 +19,8 @@ public:
+ 
+     IR::Block GenerateIR(IR::LocationDescriptor) const override;
+ 
++    void ClearCache() override;
++
+     void InvalidateCacheRanges(const boost::icl::interval_set<u64>& ranges);
+ 
+ protected:
 diff --git a/src/dynarmic/backend/arm64/address_space.cpp b/src/dynarmic/backend/arm64/address_space.cpp
 index 2c7ae777..84df25cc 100644
 --- a/src/dynarmic/backend/arm64/address_space.cpp
@@ -355,6 +425,19 @@ index 2c7ae777..84df25cc 100644
          c.set_xptr(reinterpret_cast<u32*>(entry_point + ptr_offset));
  
          switch (type) {
+diff --git a/src/dynarmic/backend/arm64/address_space.h b/src/dynarmic/backend/arm64/address_space.h
+index 835566bd..35e94a4d 100644
+--- a/src/dynarmic/backend/arm64/address_space.h
++++ b/src/dynarmic/backend/arm64/address_space.h
+@@ -41,7 +41,7 @@ public:
+ 
+     void InvalidateBasicBlocks(const tsl::robin_set<IR::LocationDescriptor>& descriptors);
+ 
+-    void ClearCache();
++    virtual void ClearCache();
+ 
+     void DumpDisassembly() const;
+ 
 diff --git a/src/dynarmic/common/spin_lock_arm64.cpp b/src/dynarmic/common/spin_lock_arm64.cpp
 index ccf807e2..19e57822 100644
 --- a/src/dynarmic/common/spin_lock_arm64.cpp

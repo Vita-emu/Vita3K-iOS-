@@ -88,10 +88,10 @@ and [shared JIT handler](https://github.com/opa334/TrollStore/blob/main/TrollSto
 ## Memory and performance tuning
 
 - On devices reporting at most 3 GiB of physical RAM, each active guest thread
-  now gets **12 MiB** of JIT code-cache capacity instead of 16 MiB. Unknown RAM
+  now gets **8 MiB** of JIT code-cache capacity instead of 16 MiB. Unknown RAM
   and larger devices keep 16 MiB. The setting is fixed for the process and is
   shared with pool prewarming so pool allocations always match thread caches.
-  At 24 active caches this reduces configured capacity from 384 to 288 MiB;
+  At 24 active caches this reduces configured capacity from 384 to 192 MiB;
   it is not a measured 96 MiB reduction in physical footprint. The iOS 26
   writable alias shares backing pages with executable memory.
 - Lazy JIT creation and cache release for one-shot dormant threads remain in
@@ -202,7 +202,7 @@ settings, `tsubomi.log`, and screenshots for any remaining graphics problem.
 - On devices reporting at most 3 GiB RAM, asynchronous pipeline compilation uses
   at most two workers (one on fewer than six logical cores), instead of forcing
   four. This bounds simultaneous compiler work; cold shader compilation may take
-  longer. The 12 MiB JIT cache policy and cyclic-thread reuse are retained.
+  longer. The low-memory JIT cache policy and cyclic-thread reuse are retained.
 - **Lower memory preset (0.5×)** enables CPU optimizations and shader caching,
   selects 1× anisotropic filtering, and disables double-buffer mapping. It leaves
   accuracy, surface sync and audio choices intact. At a native 960×544 render
@@ -231,8 +231,8 @@ reopen the app after changing them. They are loaded before JIT prewarming and
 renderer creation; existing executable regions never change size mid-session.
 No rebuild is needed to change these options after installing this version.
 
-- **JIT cache per guest thread:** Automatic, 12, 16, 24 or 32 MiB. Automatic
-  chooses 12 MiB on known devices with at most 3 GiB RAM, otherwise 16 MiB.
+- **JIT cache per guest thread:** Automatic, 4, 8, 12, 16, 24 or 32 MiB. Automatic
+  chooses 8 MiB on known devices with at most 3 GiB RAM, otherwise 16 MiB.
   This is translated-code capacity, not a RAM quota for the whole guest thread.
   Smaller caches may recompile more often. Guest thread/core counts are not
   overridden because game scheduling depends on them.
@@ -246,7 +246,7 @@ No rebuild is needed to change these options after installing this version.
   fence checks allow reuse, a buffer larger than 4 MiB can shrink if demand is
   at most one quarter of its capacity and 120 frames have passed since resizing.
   A 1 MiB floor on shrinking and the interval reduce allocation churn.
-- **iPhone 8 Plus preset:** 12 MiB JIT caches, one shader compiler, 128 textures,
+- **iPhone 8 Plus preset:** 8 MiB JIT caches, one shader compiler, 128 textures,
   buffer trimming, 0.5× resolution, CPU optimizations and shader caching enabled,
   anisotropic filtering off, double buffering off. Accuracy and surface-sync
   choices are retained. It is a starting point, not a measured FPS guarantee.
@@ -295,3 +295,32 @@ known devices with at most 3 GiB RAM. Existing explicit 256/512 selections stay
 in effect; choose the preset again and restart Tsubomi to use the smaller cache.
 Texture uploads may increase when revisiting a scene. No on-device reduction in
 MB or sustained FPS has been measured for these changes yet.
+
+### Small JIT caches and shader startup memory
+
+The ARM64 device backend now exposes 4 and 8 MiB per guest thread; Automatic on
+known <=3 GiB devices and the iPhone 8 Plus preset use 8 MiB. The x64 simulator
+keeps at least 12 MiB for explicit small-cache selections. These are executable
+code capacities, not limits on all RAM used by a thread. Thread counts remain
+controlled by the guest game; shader compiler workers are a separate setting.
+CPU optimizations remain enabled by the memory preset. iOS controls CPU/GPU
+clock rates and scheduling; there is no switch that guarantees 100% utilization.
+
+The pinned ARM64 Dynarmic backend flushes a code cache with less than 1 MiB left.
+Its A32 prelude now checks that reserve. The portable regression emits the real
+prelude with Oaknut at 4/8/12 MiB, but does not execute the generated instructions.
+4 MiB may cause more recompilation and stutter than 8 MiB. Cache flushes now also
+clear A32/A64 guest-address range metadata via virtual dispatch; previously the
+range index survived every code-cache reset and could accumulate old entries.
+This patch is included in the existing iOS dependency patch, with no workflow edit.
+
+**Precompile cached shaders at launch** is off by default on iOS. It is saved
+with the other JIT & Memory preferences and applied after restarting Tsubomi.
+Disk shader cache remains enabled by the memory preset; shaders are compiled
+when needed instead of precompiling all cached pairs at startup. Turn this on
+if startup precompilation is preferable to possible first-use shader stutter.
+The setting reduces eager compilation, not a game's eventual live working set.
+
+Neither a 4 MiB cache nor these cleanup changes guarantees staying below the
+OS memory limit. Device gameplay, JIT permissions and sustained RAM/FPS still
+need verification on iPhone; no measured MB savings are claimed here.

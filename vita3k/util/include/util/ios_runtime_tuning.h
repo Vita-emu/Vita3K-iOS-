@@ -10,11 +10,12 @@ struct Tuning {
     int shader_workers = 0;
     int texture_entries = 0;
     bool trim_staging_buffers = true;
+    bool precompile_shaders = false;
 };
 inline Tuning tuning;
 
 constexpr int jit_cache_mib(int requested) {
-    return requested == 12 || requested == 16 || requested == 24 || requested == 32 ? requested : 0;
+    return requested == 4 || requested == 8 || requested == 12 || requested == 16 || requested == 24 || requested == 32 ? requested : 0;
 }
 constexpr int shader_workers(int requested, int logical_cores) {
     const int available = logical_cores > 0 ? logical_cores : 1;

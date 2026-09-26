@@ -30,6 +30,9 @@
 #include <renderer/state.h>
 #include <util/fs.h>
 #include <util/log.h>
+#ifdef VITA3K_PLATFORM_IOS
+#include <util/ios_runtime_tuning.h>
+#endif
 #include <util/net_utils.h>
 
 #include <SDL3/SDL_camera.h>
@@ -279,6 +282,12 @@ void prepare_game_launch_overlay(EmuEnvState &emuenv) {
         renderer.precompile_bg_path = fs_utils::path_to_utf8(bg_path);
 
     if (emuenv.cfg.current_config.shader_cache && renderer::get_shaders_cache_hashs(renderer)) {
+#ifdef VITA3K_PLATFORM_IOS
+        // Keep the disk cache/index available for on-demand compilation without
+        // materializing every previously seen shader at game startup.
+        if (!ios_runtime::tuning.precompile_shaders)
+            return;
+#endif
         renderer.precompile_queue = renderer.shaders_cache_hashs;
         renderer.precompile_progress = 0;
         renderer.precompile_complete.store(false, std::memory_order_relaxed);

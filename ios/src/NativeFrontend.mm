@@ -1939,6 +1939,7 @@ void vita3k_ios_load_runtime_preferences() {
         NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
         ios_runtime::tuning.jit_cache_mib = static_cast<int>([defaults integerForKey:@"tsubomi.jitCacheMiB"]);
         ios_runtime::tuning.shader_workers = static_cast<int>([defaults integerForKey:@"tsubomi.shaderWorkers"]);
+        ios_runtime::tuning.precompile_shaders = [defaults boolForKey:@"tsubomi.precompileShaders"];
         ios_runtime::tuning.texture_entries = static_cast<int>([defaults integerForKey:@"tsubomi.textureCacheEntries"]);
         ios_runtime::tuning.trim_staging_buffers = [defaults objectForKey:@"tsubomi.trimStagingBuffers"] == nil
             || [defaults boolForKey:@"tsubomi.trimStagingBuffers"];

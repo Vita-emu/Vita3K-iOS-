@@ -25,6 +25,7 @@ struct SettingsView: View {
     private var normalListArtwork = NormalListArtwork.coverArt.rawValue
     @AppStorage(LibrarySortOption.defaultsKey)
     private var librarySort = LibrarySortOption.alphabetical.rawValue
+    @AppStorage("tsubomi.precompileShaders") private var precompileShaders = false
     @AppStorage("tsubomi.jitCacheMiB") private var jitCacheMiB = 0
     @AppStorage("tsubomi.shaderWorkers") private var shaderWorkers = 0
     @AppStorage("tsubomi.textureCacheEntries") private var textureCacheEntries = 0
@@ -168,7 +169,7 @@ struct SettingsView: View {
         Section {
             Picker("JIT cache per guest thread", selection: $jitCacheMiB) {
                 Text("Automatic").tag(0)
-                ForEach([12, 16, 24, 32], id: \.self) { value in
+                ForEach([4, 8, 12, 16, 24, 32], id: \.self) { value in
                     Text("\(value) MiB").tag(value)
                 }
             }
@@ -182,12 +183,14 @@ struct SettingsView: View {
                     Text("\(value) textures").tag(value)
                 }
             }
+            Toggle("Precompile cached shaders at launch", isOn: $precompileShaders)
             Toggle("Trim oversized upload buffers", isOn: $trimStagingBuffers)
             Button("Use iPhone 8 Plus memory settings") {
-                jitCacheMiB = 12
+                jitCacheMiB = 8
                 shaderWorkers = 1
                 textureCacheEntries = 128
                 trimStagingBuffers = true
+                precompileShaders = false
                 model.useLowerMemoryPreset()
             }
             Button("Reset memory settings to Automatic") {
@@ -195,12 +198,13 @@ struct SettingsView: View {
                 shaderWorkers = 0
                 textureCacheEntries = 0
                 trimStagingBuffers = true
+                precompileShaders = false
             }
         } header: {
             Text("JIT & Memory")
         } footer: {
             Text("""
-                Saved immediately. Close and reopen Tsubomi to apply these settings; no rebuild is needed.                 Automatic uses 12 MiB per JIT thread and 128 cached textures on a 3 GB phone.                 JIT cache is translated code, not all RAM used by a thread. Smaller caches save memory but can cause recompilation.                 Shader threads control background GPU compilation, not the game's CPU core count; fewer use less memory but compile more slowly.                 A smaller texture cache may cause extra uploads. Upload buffer trimming releases oversized temporary GPU buffers after reuse becomes safe.                 These limits do not cap total app RAM or guarantee 30 FPS.
+                Saved immediately. Close and reopen Tsubomi to apply these settings; no rebuild is needed.                 Automatic uses 8 MiB per JIT thread and 128 cached textures on a 3 GB phone.                 JIT cache is translated code, not all RAM used by a thread. 4 MiB saves more memory but can cause frequent recompilation and stutter; start with 8 MiB.                 Shader threads control background GPU compilation, not the game's CPU core count; fewer use less memory but compile more slowly.                 A smaller texture cache may cause extra uploads. Leave shader precompilation off to compile only when needed; first use may stutter. Upload buffer trimming releases oversized temporary GPU buffers after reuse becomes safe.                 These limits do not cap total app RAM or guarantee 30 FPS.
                 """)
         }
     }

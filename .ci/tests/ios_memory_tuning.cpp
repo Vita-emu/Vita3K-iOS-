@@ -95,8 +95,8 @@ static bool staging_needs_wait(uint64_t previous_frame, uint64_t frame, bool use
 static void *handle(int value) { return reinterpret_cast<void *>(static_cast<uintptr_t>(value)); }
 int main() {
     using namespace ios_runtime;
-    for (int invalid : {-100, -1, 1, 8, 9, 11, 13, 33, 4096}) assert(jit_cache_mib(invalid) == 0);
-    for (int valid : {12, 16, 24, 32}) assert(jit_cache_mib(valid) == valid);
+    for (int invalid : {-100, -1, 1, 3, 5, 7, 9, 11, 13, 33, 4096}) assert(jit_cache_mib(invalid) == 0);
+    for (int valid : {4, 8, 12, 16, 24, 32}) assert(jit_cache_mib(valid) == valid);
     assert(shader_workers(0, 4) == 0);
     assert(shader_workers(4, 2) == 2);
     assert(shader_workers(2, 0) == 1);

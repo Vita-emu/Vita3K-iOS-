@@ -51,7 +51,13 @@ std::size_t ios_jit_code_cache_size() {
             || size != sizeof(physical_memory))
             physical_memory = 0;
 #endif
-        const int requested = ios_runtime::jit_cache_mib(ios_runtime::tuning.jit_cache_mib);
+        int requested = ios_runtime::jit_cache_mib(ios_runtime::tuning.jit_cache_mib);
+#if !defined(__aarch64__)
+        // Small-cache support is verified against the ARM64 backend only.
+        // Keep the existing x64 simulator budget above its documented minimum.
+        if (requested != 0 && requested < 12)
+            requested = 12;
+#endif
         const std::size_t selected = requested ? static_cast<std::size_t>(requested) * 1024 * 1024
                                                : ios_jit_cache_size_for_memory(physical_memory);
         LOG_INFO("iOS JIT cache budget: {} MiB per thread (physical memory: {} MiB; 0 = unknown)",
@@ -405,8 +411,8 @@ std::unique_ptr<Dynarmic::A32::Jit> DynarmicCPU::make_jit() {
     Dynarmic::A32::UserConfig config{};
 #if defined(VITA3K_PLATFORM_IOS)
     // One cache per guest thread: use a smaller budget on <=3 GiB devices.
-    // Both budgets exceed Dynarmic's approximate 8 MiB minimum. The backend
-    // clears a full cache; cyclic threads retain theirs across restarts.
+    // The ARM64 backend clears full caches, including their range metadata,
+    // and validates the prelude/emission reserve for 4/8 MiB selections.
     config.code_cache_size = ios_jit_code_cache_size();
 #endif
     config.arch_version = Dynarmic::A32::ArchVersion::v7;
