@@ -43,6 +43,9 @@ EXPORT(void, SceImeEventHandler, Ptr<void> arg, const SceImeEvent *e) {
 
 EXPORT(SceInt32, sceImeClose) {
     TRACY_FUNC(sceImeClose);
+#if defined(VITA3K_PLATFORM_IOS)
+    std::lock_guard lock(emuenv.ime.mutex);
+#endif
     emuenv.ime.state = false;
 
     if (emuenv.ime.param.inputTextBuffer.address())
@@ -58,6 +61,12 @@ EXPORT(SceInt32, sceImeClose) {
 
 EXPORT(SceInt32, sceImeOpen, SceImeParam *param) {
     TRACY_FUNC(sceImeOpen, param);
+#if defined(VITA3K_PLATFORM_IOS)
+    std::lock_guard lock(emuenv.ime.mutex);
+#endif
+    if (!param || param->maxTextLength > SCE_IME_MAX_TEXT_LENGTH)
+        return RET_ERROR(SCE_IME_ERROR_INVALID_PARAM);
+    ++emuenv.ime.session_id;
     emuenv.ime.caps_level = 0;
     emuenv.ime.caretIndex = 0;
     emuenv.ime.edit_text = {};
@@ -82,7 +91,7 @@ EXPORT(SceInt32, sceImeOpen, SceImeParam *param) {
     }
 
     emuenv.ime.edit_text.str = emuenv.ime.param.inputTextBuffer;
-    emuenv.ime.param.inputTextBuffer = Ptr<SceWChar16>(alloc(emuenv.mem, SCE_IME_MAX_PREEDIT_LENGTH + emuenv.ime.param.maxTextLength + 1, "ime_str"));
+    emuenv.ime.param.inputTextBuffer = Ptr<SceWChar16>(alloc(emuenv.mem, (SCE_IME_MAX_PREEDIT_LENGTH + emuenv.ime.param.maxTextLength + 1) * sizeof(SceWChar16), "ime_str"));
     emuenv.ime.str = emuenv.ime.param.initialText ? reinterpret_cast<char16_t *>(emuenv.ime.param.initialText.get(emuenv.mem)) : u"";
     if (!emuenv.ime.str.empty())
         emuenv.ime.caretIndex = emuenv.ime.edit_text.caretIndex = emuenv.ime.edit_text.preeditIndex = static_cast<SceUInt32>(emuenv.ime.str.length());
@@ -139,10 +148,9 @@ EXPORT(int, sceImeSetText, const SceWChar16 *text, SceUInt32 length) {
 
 EXPORT(SceInt32, sceImeUpdate) {
     TRACY_FUNC(sceImeUpdate);
+    std::unique_lock lock(emuenv.ime.mutex);
     if (!emuenv.ime.state)
         return RET_ERROR(SCE_IME_ERROR_NOT_OPENED);
-
-    std::lock_guard lock(emuenv.ime.mutex);
 
     if (emuenv.ime.event_id == SCE_IME_EVENT_OPEN)
         return 0;
@@ -151,11 +159,16 @@ EXPORT(SceInt32, sceImeUpdate) {
     SceImeEvent *e = event.get(emuenv.mem);
     e->id = emuenv.ime.event_id;
     memcpy(emuenv.ime.edit_text.str.get(emuenv.mem), emuenv.ime.str.c_str(), (emuenv.ime.str.length() + 1) * sizeof(SceWChar16));
-    e->param.text = emuenv.ime.edit_text;
-    e->param.caretIndex = emuenv.ime.caretIndex;
-    CALL_EXPORT(SceImeEventHandler, emuenv.ime.param.arg, e);
-    free(emuenv.mem, event.address());
+    // These are union members: writing caretIndex after text overwrites text.preeditIndex.
+    if (e->id == SCE_IME_EVENT_UPDATE_CARET)
+        e->param.caretIndex = emuenv.ime.caretIndex;
+    else
+        e->param.text = emuenv.ime.edit_text;
+    const auto arg = emuenv.ime.param.arg;
     emuenv.ime.event_id = SCE_IME_EVENT_OPEN;
+    lock.unlock(); // Guest callbacks can call sceImeClose/Open.
+    CALL_EXPORT(SceImeEventHandler, arg, e);
+    free(emuenv.mem, event.address());
 
     return 0;
 }
