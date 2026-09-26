@@ -53,7 +53,7 @@ def verify_bundle(app, maximum):
                 if stream.read(4) in magic_numbers:
                     binaries.add(path)
     for path in sorted(binaries):
-        subprocess.run(["xcrun", "lipo", "-verify_arch", "arm64", str(path)], check=True)
+        subprocess.run(["xcrun", "lipo", str(path), "-verify_arch", "arm64"], check=True)
         info = subprocess.check_output(
             ["xcrun", "vtool", "-arch", "arm64", "-show-build", str(path)], text=True)
         try:

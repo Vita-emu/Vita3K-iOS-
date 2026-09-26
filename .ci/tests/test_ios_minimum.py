@@ -1,6 +1,8 @@
 import importlib.util
 from pathlib import Path
 import plistlib
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -51,6 +53,43 @@ class IOSMinimumTests(unittest.TestCase):
             (app / "Info.plist").write_bytes(plistlib.dumps({"MinimumOSVersion": "26.0"}))
             with self.assertRaisesRegex(ValueError, "Info.plist requires"):
                 checker.verify_bundle(app, "16.7")
+
+    def test_lipo_receives_only_architectures_after_verify_arch(self):
+        with tempfile.TemporaryDirectory(prefix="ios bundle ") as directory:
+            app = Path(directory)
+            (app / "Info.plist").write_bytes(plistlib.dumps({
+                "MinimumOSVersion": "16.7", "CFBundleExecutable": "App"}))
+            executable = app / "App"
+            executable.write_bytes(bytes.fromhex("cffaedfe"))
+
+            def verify_arch(command, *, check):
+                # lipo consumes every argument after -verify_arch as an architecture.
+                index = command.index("-verify_arch")
+                self.assertEqual(command[index + 1:], ["arm64"])
+                self.assertIn(str(executable), command[2:index])
+                self.assertTrue(check)
+
+            with patch.object(checker.subprocess, "run", side_effect=verify_arch) as run, \
+                    patch.object(checker.subprocess, "check_output",
+                                 return_value="platform IOS\nminos 16.7\nsdk 26.2"):
+                checker.verify_bundle(app, "16.7")
+                run.assert_called_once()
+
+    @unittest.skipUnless(sys.platform == "darwin", "Requires Xcode and the iPhoneOS SDK")
+    def test_real_apple_tools_accept_ios_arm64_bundle(self):
+        with tempfile.TemporaryDirectory(prefix="ios bundle ") as directory:
+            root = Path(directory)
+            app = root / "Probe.app"
+            app.mkdir()
+            (app / "Info.plist").write_bytes(plistlib.dumps({
+                "MinimumOSVersion": "16.7", "CFBundleExecutable": "Probe"}))
+            source = root / "probe.c"
+            source.write_text("int main(void) { return 0; }\n")
+            subprocess.run([
+                "xcrun", "--sdk", "iphoneos", "clang", "-target", "arm64-apple-ios16.7",
+                str(source), "-o", str(app / "Probe"),
+            ], check=True)
+            checker.verify_bundle(app, "16.7")
 
 
 if __name__ == "__main__":
