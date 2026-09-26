@@ -11,6 +11,8 @@ on:
       - "vita3k/packages/**"
       - "external/miniz/**"
       - ".ci/package-ios.sh"
+      - ".ci/verify-ios-minimum.py"
+      - ".ci/tests/**"
       - ".github/workflows/ios.yml"
   pull_request:
     paths:
@@ -19,6 +21,8 @@ on:
       - "vita3k/packages/**"
       - "external/miniz/**"
       - ".ci/package-ios.sh"
+      - ".ci/verify-ios-minimum.py"
+      - ".ci/tests/**"
       - ".github/workflows/ios.yml"
 
 permissions:
@@ -135,7 +139,7 @@ jobs:
             -DCMAKE_OSX_SYSROOT=iphoneos \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DVITA3K_BUILD_IOS=ON \
-            -DVITA3K_IOS_DEPLOYMENT_TARGET=26.0 \
+            -DVITA3K_IOS_DEPLOYMENT_TARGET=16.7 \
             -DVITA3K_IOS_LINK_CORE=ON
 
       - name: Build unsigned device application
@@ -147,6 +151,9 @@ jobs:
             -sdk iphoneos \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO
+
+      - name: Test iOS compatibility packaging checks
+        run: python3 -m unittest discover -s .ci/tests -v
 
       - name: Package and verify unsigned IPA
         id: package
