@@ -109,6 +109,7 @@ struct State {
 
     std::vector<ShadersHash> shaders_cache_hashs;
     std::string shader_version;
+    std::atomic_bool use_disk_shader_cache{ true };
 
     int last_scene_id = 0;
 

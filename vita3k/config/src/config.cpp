@@ -305,13 +305,22 @@ ExitCode serialize_config(Config &cfg, const fs::path &output_path) {
     emitter << out_node;
     emitter << YAML::EndDoc;
 
-    fs::ofstream fo(output);
+    const fs::path temporary = fs_utils::path_concat(output, ".tmp");
+    fs::ofstream fo(temporary);
     if (!fo) {
         return InvalidApplicationPath;
     }
 
     fo << emitter.c_str();
     fo.close();
+    boost::system::error_code error;
+    if (fo)
+        fs::rename(temporary, output, error);
+    if (!fo || error) {
+        LOG_ERROR("Could not save configuration; retaining previous settings");
+        fs::remove(temporary, error);
+        return InvalidApplicationPath;
+    }
 
     return Success;
 }

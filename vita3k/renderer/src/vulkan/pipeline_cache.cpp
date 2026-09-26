@@ -241,11 +241,13 @@ void PipelineCache::init(bool support_rasterized_order_access) {
     else
         nb_worker_threads = 1;
 #ifdef VITA3K_PLATFORM_IOS
-    // The first boot of a title in each app process pays the full
-    // SPIR-V -> MSL -> Metal binary cost for every pipeline while draws are
-    // skipped (the white-screen wait). The 6-core A-series chips land on two
-    // workers with the desktop table; give the burst more parallelism.
-    nb_worker_threads = std::max(nb_worker_threads, 4);
+    // Metal compilation has large transient allocations. Leave CPU time for
+    // guest JIT/audio and avoid four simultaneous compilers on 3 GiB devices.
+    const int memory_mib = SDL_GetSystemRAM();
+    if (memory_mib > 0 && memory_mib <= 3 * 1024)
+        nb_worker_threads = std::min(nb_worker_threads, 2);
+    else
+        nb_worker_threads = std::max(nb_worker_threads, 4);
 #endif
 
     if (use_async_compilation) {
@@ -544,9 +546,11 @@ vk::PipelineShaderStageCreateInfo PipelineCache::retrieve_shader(const SceGxmPro
     const std::string hash_text = hex_string(hash);
 
     LOG_INFO("Generating vulkan spv shader {}", hash_text);
-    const std::string shader_version = fmt::format("vk{}", shader::CURRENT_VERSION);
+    // Accuracy and GPU feature choices change generated SPIR-V. Keep each
+    // variant separate even when disk-cache reads were disabled last launch.
+    const std::string shader_version = fmt::format("vk{}-f{:x}", shader::CURRENT_VERSION, state.get_features_mask());
 
-    shader::usse::SpirvCode source = load_spirv_shader(*program, state.features, true, hints, maskupdate, state.shaders_path, state.shaders_log_path, shader_version, true);
+    shader::usse::SpirvCode source = load_spirv_shader(*program, state.features, true, hints, maskupdate, state.shaders_path, state.shaders_log_path, shader_version, state.use_disk_shader_cache.load(std::memory_order_relaxed));
 
     vk::ShaderModuleCreateInfo shader_info{
         .codeSize = sizeof(uint32_t) * source.size(),

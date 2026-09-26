@@ -53,14 +53,14 @@ struct OnboardingView: View {
         ),
         Page(
             symbol: "gearshape.2",
-            title: "Install Firmware",
-            body: "Choose the official PSVUPDAT.PUP. After installation, tap Next to install the fonts.",
+            title: "1. Install System Firmware",
+            body: "Choose PSVUPDAT.PUP from Files. This installs the Vita system software. Wait for Installed, then tap Next.",
             requirement: .mainFirmware
         ),
         Page(
             symbol: "textformat",
-            title: "Install Font Firmware",
-            body: "Choose the official font package PSP2UPDAT.PUP. It is separate from PSVUPDAT.PUP.",
+            title: "2. Install Fonts",
+            body: "Choose PSP2UPDAT.PUP from Files. This separate package installs the fonts games need. You need both packages; renaming the system firmware will not turn it into the font package.",
             requirement: .fontPackage
         ),
         Page(
@@ -90,7 +90,10 @@ struct OnboardingView: View {
         // costs vertical space, which is what left the screen mostly empty.
         VStack(spacing: 0) {
             Spacer(minLength: 0)
-            pageContent
+            ScrollView {
+                pageContent
+                    .frame(maxWidth: .infinity)
+            }
             Spacer(minLength: 0)
             actions
         }
@@ -125,9 +128,15 @@ struct OnboardingView: View {
                     .font(isCompact ? .footnote : .body)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
-                    // Natural height: no ScrollView, which is greedy and was
-                    // what stretched this down the screen.
+                    // Preserve the full instructions within the scrollable area.
                     .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if page.requirement != nil {
+                Text("Download the file in Files first if it is stored in iCloud. Keep Tsubomi open during installation.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
             }
 
             if page.requirement != nil, let status = library.statusMessage {
@@ -180,12 +189,12 @@ struct OnboardingView: View {
                 // the finished page still points at the button the user has
                 // already used, and Next reads as unavailable.
                 if requirementSatisfied {
-                    Button("Choose Firmware File") {
+                    Button(page.requirement == .mainFirmware ? "Choose PSVUPDAT.PUP" : "Choose PSP2UPDAT.PUP") {
                         Bridge.presentFirmwareImportPicker()
                     }
                     .compatibleGlassButton()
                 } else {
-                    Button("Choose Firmware File") {
+                    Button(page.requirement == .mainFirmware ? "Choose PSVUPDAT.PUP" : "Choose PSP2UPDAT.PUP") {
                         Bridge.presentFirmwareImportPicker()
                     }
                     .compatibleGlassButton(prominent: true)
@@ -254,7 +263,7 @@ struct OnboardingView: View {
         let requirement: FirmwareRequirement?
     }
 
-    private enum FirmwareRequirement {
+    private enum FirmwareRequirement: Equatable {
         case fontPackage
         case mainFirmware
 

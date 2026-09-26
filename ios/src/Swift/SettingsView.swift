@@ -14,6 +14,7 @@ import SwiftUI
 /// reimplemented.
 @MainActor
 struct SettingsView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var model: SettingsModel
     @ObservedObject private var runtimeLatch = RuntimeLatch.shared
     @AppStorage("tsubomi.orientationLockEnabled")
@@ -56,6 +57,10 @@ struct SettingsView: View {
                 if model.isPerGame {
                     perGameResetSection
                 }
+            }
+            .onDisappear { model.save() }
+            .onChange(of: scenePhase) { phase in
+                if phase != .active { model.save() }
             }
             .navigationTitle(model.navigationTitle)
             .navigationBarTitleDisplayMode(.inline)
@@ -164,6 +169,9 @@ struct SettingsView: View {
 
     private var graphicsSection: some View {
         Section {
+            Button("Lower memory preset (0.5×)") {
+                model.useLowerMemoryPreset()
+            }
             // A labelled slider rather than a stepper: the multiplier is
             // continuous and the exact number matters less than the direction.
             LabeledContent("Resolution") {
@@ -197,6 +205,8 @@ struct SettingsView: View {
             // to the switches it is about, not behind a glyph on the home
             // screen. Kept to the three symptoms people actually report.
             Text("""
+                Changes save automatically and apply on the next game launch. \
+                The lower memory preset renders at 480×272; 30 FPS means 33.33 ms per frame, but varies by game. \
                 Graphics look wrong? Try High accuracy. \
                 Lighting white or missing? Also turn on Surface sync. \
                 Character models shattered? Make sure Double buffer is off.

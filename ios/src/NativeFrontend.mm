@@ -868,13 +868,7 @@ void present_settings_sheet(NSString *title_id, NSString *display_name) {
         ? [TsubomiSettingsHost settingsViewControllerForTitle:title_id
                                                   displayName:display_name
                                                dismissHandler:^{}]
-        : [TsubomiSettingsHost globalSettingsViewControllerWithDismissHandler:^{
-              // The core applies the change on its own thread and reports
-              // restart-required fields through the status toast.
-              Vita3KIOSFrontendAction action;
-              action.kind = Vita3KIOSFrontendActionKind::Refresh;
-              queue_action(std::move(action));
-          }];
+        : [TsubomiSettingsHost globalSettingsViewControllerWithDismissHandler:^{}];
     [root presentViewController:controller animated:YES completion:nil];
 }
 

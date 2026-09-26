@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <span>
 #include <string>
 #include <vector>
@@ -48,6 +49,6 @@ struct ArchiveInstallResult {
 ArchiveInspection inspect_archive(std::span<const std::uint8_t> content);
 ArchiveInspection inspect_archive(const std::filesystem::path &path);
 ArchiveInstallResult install_archive_transactionally(const std::filesystem::path &archive_path,
-    const std::filesystem::path &vfs_root);
+    const std::filesystem::path &vfs_root, const std::function<void(uint32_t)> &progress = {});
 
 } // namespace packages

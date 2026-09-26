@@ -603,6 +603,7 @@ void apply_renderer_config(EmuEnvState &emuenv) {
     r.set_anisotropic_filtering(cc.anisotropic_filtering);
     r.set_stretch_display(cc.stretch_the_display_area);
     r.stretch_hd_pixel_perfect(cc.fullscreen_hd_res_pixel_perfect);
+    r.use_disk_shader_cache.store(cc.shader_cache, std::memory_order_relaxed);
     r.set_async_compilation(cc.async_pipeline_compilation);
     r.get_texture_cache()->set_replacement_state(cc.import_textures, cc.export_textures, cc.export_as_png);
 #ifdef __ANDROID__
@@ -696,6 +697,7 @@ void apply_runtime_settings(EmuEnvState &emuenv) {
     r.set_anisotropic_filtering(cc.anisotropic_filtering);
     r.set_stretch_display(cc.stretch_the_display_area);
     r.stretch_hd_pixel_perfect(cc.fullscreen_hd_res_pixel_perfect);
+    r.use_disk_shader_cache.store(cc.shader_cache, std::memory_order_relaxed);
     r.set_async_compilation(cc.async_pipeline_compilation);
     r.get_texture_cache()->set_replacement_state(cc.import_textures, cc.export_textures, cc.export_as_png);
 #ifdef __ANDROID__

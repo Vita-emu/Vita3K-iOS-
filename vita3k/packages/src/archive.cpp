@@ -33,6 +33,7 @@ struct SfoBuffer {
 struct InstallOutput {
     std::ofstream stream;
     std::uint64_t written{};
+    std::function<void(std::uint64_t)> progress;
 };
 
 bool read_archive_path(mz_zip_archive &zip, mz_uint index, std::string &name) {
@@ -141,6 +142,8 @@ size_t write_install_file(void *opaque, mz_uint64 file_offset, const void *buffe
     if (!output.stream)
         return 0;
     output.written += size;
+    if (output.progress)
+        output.progress(output.written);
     return size;
 }
 
@@ -273,7 +276,7 @@ ArchiveInspection inspect_archive(const std::filesystem::path &path) {
 }
 
 ArchiveInstallResult install_archive_transactionally(const std::filesystem::path &archive_path,
-    const std::filesystem::path &vfs_root) {
+    const std::filesystem::path &vfs_root, const std::function<void(uint32_t)> &progress) {
     ArchiveInstallResult result{ .attempted = true };
     mz_zip_archive zip{};
     const auto path_text = archive_path.string();
@@ -376,12 +379,19 @@ ArchiveInstallResult install_archive_transactionally(const std::filesystem::path
         std::filesystem::create_directories(output_path.parent_path(), error);
         if (error)
             return fail("Could not create a staged application directory: " + error.message());
-        InstallOutput output{ .stream = std::ofstream(output_path, std::ios::binary) };
+        InstallOutput output{ .stream = std::ofstream(output_path, std::ios::binary),
+            .progress = [&](std::uint64_t written) {
+                if (progress && inspection.uncompressed_size != 0)
+                    progress(static_cast<uint32_t>(std::min<uint64_t>(99,
+                        (result.bytes_written + written) * 100 / inspection.uncompressed_size)));
+            } };
         if (!output.stream)
             return fail("Could not create a staged application file.");
         if (!mz_zip_reader_extract_to_callback(&zip, index, write_install_file, &output, 0) || output.written != stat.m_uncomp_size)
             return fail("A staged ZIP entry failed decompression or size verification.");
         output.stream.close();
+        if (!output.stream)
+            return fail("Could not finish writing a staged file; check free storage.");
         ++result.file_count;
         result.bytes_written += output.written;
     }
@@ -465,6 +475,8 @@ ArchiveInstallResult install_archive_transactionally(const std::filesystem::path
 
     cleanup();
     result.success = true;
+    if (progress)
+        progress(100);
     result.application_count = inspection.applications.size();
     result.installed_applications = inspection.applications;
     std::ostringstream detail;

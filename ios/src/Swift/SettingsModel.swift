@@ -39,6 +39,11 @@ final class SettingsModel: ObservableObject {
     let firmwareReady: Bool
     let missingFirmware: String
 
+    private var changes: AnyCancellable?
+    private var hasChanges = false
+    private var autosave: AnyCancellable?
+    private var overridesWereReset = false
+
     /// Firmware/controller-binding fields the screen shows but never edits are
     /// kept here so they can be written back untouched — the core is handed a
     /// whole settings value, so a dropped field would clear real state.
@@ -73,6 +78,12 @@ final class SettingsModel: ObservableObject {
         firmwareVersion = settings.firmwareVersion
         firmwareReady = settings.firmwareReady
         missingFirmware = settings.missingFirmware
+
+        // Debounce sliders; the callback runs after @Published has stored values.
+        changes = objectWillChange.sink { [weak self] _ in self?.hasChanges = true }
+        autosave = objectWillChange
+            .debounce(for: .milliseconds(300), scheduler: RunLoop.main)
+            .sink { [weak self] _ in self?.save() }
     }
 
     var isPerGame: Bool {
@@ -89,6 +100,8 @@ final class SettingsModel: ObservableObject {
 
     /// Writes the edits back through the bridge.
     func save() {
+        guard hasChanges && !overridesWereReset else { return }
+        hasChanges = false
         let settings = original.copy() as! EmulatorSettings
         settings.resolutionMultiplier = resolutionMultiplier
         settings.vSync = vSync
@@ -118,7 +131,18 @@ final class SettingsModel: ObservableObject {
     /// Drops this title's overrides so it follows the global settings again.
     func resetPerGameOverrides() {
         guard case .perGame(let titleID, _) = scope else { return }
+        overridesWereReset = true
+        autosave?.cancel()
         Bridge.resetSettings(forTitle: titleID)
+    }
+
+    /// Reduce render-target memory and shader work without changing guest timing.
+    func useLowerMemoryPreset() {
+        resolutionMultiplier = 0.5
+        cpuOptimizations = true
+        shaderCache = true
+        anisotropicFiltering = 1
+        doubleBuffer = false
     }
 
     // MARK: - Value formatting

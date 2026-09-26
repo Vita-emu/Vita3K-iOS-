@@ -185,3 +185,40 @@ confirm the library updates, type/save a name (including Thai or emoji), cancel
 and reopen a dialog, quit while the keyboard is open, and compare memory and
 textures in the affected game across a full app restart. Record title IDs,
 settings, `tsubomi.log`, and screenshots for any remaining graphics problem.
+
+
+## Settings, installation and lower-memory rendering
+
+- Graphics/CPU edits save after a short debounce, on leaving Settings, and
+  when the scene becomes inactive. Opening a per-game page without editing
+  does not create an override; Reset continues to remove the override.
+- Native settings preserve current fields not exposed in the UI. Configuration
+  writes use a temporary file and rename so an interrupted write does not
+  truncate the previous settings file.
+- Shader cache now reaches the per-title runtime and Vulkan disk reader. Turning
+  it off regenerates shaders on demand; regenerated shaders can still be saved
+  for later use. Vulkan SPIR-V filenames include the GPU feature mask, and the
+  cache index rejects truncated counts and is published through a temporary file.
+- On devices reporting at most 3 GiB RAM, asynchronous pipeline compilation uses
+  at most two workers (one on fewer than six logical cores), instead of forcing
+  four. This bounds simultaneous compiler work; cold shader compilation may take
+  longer. The 12 MiB JIT cache policy and cyclic-thread reuse are retained.
+- **Lower memory preset (0.5×)** enables CPU optimizations and shader caching,
+  selects 1× anisotropic filtering, and disables double-buffer mapping. It leaves
+  accuracy, surface sync and audio choices intact. At a native 960×544 render
+  size, 0.5× means 480×272 and one quarter as many pixels; total process RAM does
+  not fall by the same ratio.
+- PUP extraction and image joining copy 64 KiB at a time. SCE decryption reads
+  metadata instead of retaining the complete input package and decrypts segments
+  in place. Compressed segments still need decompression storage. ZIP imports
+  report extraction progress; PUP imports report installation stages. Selecting
+  firmware now names **PSVUPDAT.PUP** and **PSP2UPDAT.PUP** explicitly and reports
+  which package is still missing. Download cloud files first and keep the app open.
+
+30 FPS is a 33.33 ms frame budget, not a guaranteed result or a change to guest
+VBlank timing. Compare the same title, save, camera and thermal state before/after
+using the FPS/frametime/RAM overlay. Device tests must also cover swipe-dismissed
+settings, relaunch, Reset per-game settings, both real PUP packages, PKG/ZIP
+installation, and a second game launch after changing High accuracy. Host tests
+exercise copy/decryption, cache-index bounds and settings propagation with
+synthetic adapters; they do not replace an Xcode build or iPhone measurements.

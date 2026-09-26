@@ -2078,14 +2078,26 @@ void start_import(EmuEnvState &emuenv, const std::string &path, const bool firmw
         pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
         try {
             if (job->firmware) {
-                const std::string version = install_pup(emuenv.vita_fs_path, fs::path(path), nullptr);
+                const std::string version = install_pup(emuenv.vita_fs_path, fs::path(path), [job](uint32_t percent) {
+                    job->progress.store(static_cast<int>(std::min(percent, 100U)));
+                });
                 if (version.empty()) {
                     job->message = "Firmware install failed (see tsubomi.log)";
                 } else {
                     fs::ofstream out(emuenv.log_path / "fw_version.txt");
                     out << version;
                     job->success = true;
-                    job->message = "Firmware " + version + " installed";
+                    const auto installed = app::get_firmware_state(emuenv);
+                    if (installed.main_firmware && installed.font_package)
+                        job->message = "System firmware and fonts are ready. Tap Next to continue.";
+                    else if (installed.main_firmware)
+                        job->message = "System firmware installed. Next, choose PSP2UPDAT.PUP for fonts.";
+                    else if (installed.font_package)
+                        job->message = "Fonts installed. Choose PSVUPDAT.PUP to install the system firmware.";
+                    else {
+                        job->success = false;
+                        job->message = "Required firmware files are missing. Choose the official PSVUPDAT.PUP or PSP2UPDAT.PUP.";
+                    }
                 }
             } else if (fs::path(path).extension() == ".pkg" || fs::path(path).extension() == ".PKG") {
                 std::string zrif = find_pkg_zrif(fs::path(path), emuenv.vita_fs_path);
@@ -2099,7 +2111,8 @@ void start_import(EmuEnvState &emuenv, const std::string &path, const bool firmw
                 }
             } else {
                 const auto result = packages::install_archive_transactionally(
-                    std::filesystem::path(path), std::filesystem::path(emuenv.vita_fs_path.string()));
+                    std::filesystem::path(path), std::filesystem::path(emuenv.vita_fs_path.string()),
+                    [job](uint32_t percent) { job->progress.store(static_cast<int>(percent)); });
                 job->success = result.success;
                 job->installed_applications = result.installed_applications;
                 job->message = result.success
@@ -2279,6 +2292,7 @@ std::string restart_setting_name(config::RestartRequiredSetting setting) {
 void apply_native_settings(EmuEnvState &emuenv, const Vita3KIOSSettings &settings) {
     Config desired;
     desired = emuenv.cfg;
+    desired.current_config = emuenv.cfg.current_config;
     auto apply = [&](Config::CurrentConfig &current) {
         current.resolution_multiplier = settings.resolution_multiplier;
         current.v_sync = settings.v_sync;
@@ -2334,6 +2348,7 @@ void apply_game_session_settings(EmuEnvState &emuenv, const Vita3KIOSSettings &s
     auto &current = emuenv.cfg.current_config;
     current.resolution_multiplier = settings.resolution_multiplier;
     current.v_sync = settings.v_sync;
+    current.shader_cache = settings.shader_cache;
     current.fps_hack = false;
     current.cpu_opt = settings.cpu_opt;
     current.ngs_enable = settings.ngs_enable;
