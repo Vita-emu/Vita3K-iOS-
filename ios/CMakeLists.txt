@@ -22,6 +22,7 @@ if(VITA3K_BUILD_IOS_UPSTREAM_CORE)
         "${CMAKE_CURRENT_SOURCE_DIR}/third_party/cuelume-LICENSE.txt")
     add_executable(Vita3KiOS MACOSX_BUNDLE
         src/NativeFrontend.mm
+        src/TextInput.mm
         src/TsubomiBridge.mm
         src/UpstreamMain.cpp
         src/VirtualController.mm
