@@ -239,14 +239,14 @@ No rebuild is needed to change these options after installing this version.
 - **Shader compiler threads:** Automatic or 1–4, capped to detected host cores.
   This controls the Vulkan asynchronous compilation workers, not guest CPU
   threads. With async compilation disabled it does not create background workers.
-- **Texture cache:** Automatic or 128/256/512 entries. Automatic uses 256 on
+- **Texture cache:** Automatic or 128/256/512 entries. Automatic uses 128 on
   known <=3 GiB devices, 512 otherwise. Entries differ in byte size, so this is
   not a total-RAM limit. Fewer entries can increase texture uploads/stutter.
 - **Trim oversized upload buffers:** enabled by default. Once the existing GPU
   fence checks allow reuse, a buffer larger than 4 MiB can shrink if demand is
   at most one quarter of its capacity and 120 frames have passed since resizing.
   A 1 MiB floor on shrinking and the interval reduce allocation churn.
-- **iPhone 8 Plus preset:** 12 MiB JIT caches, one shader compiler, 256 textures,
+- **iPhone 8 Plus preset:** 12 MiB JIT caches, one shader compiler, 128 textures,
   buffer trimming, 0.5× resolution, CPU optimizations and shader caching enabled,
   anisotropic filtering off, double buffering off. Accuracy and surface-sync
   choices are retained. It is a starting point, not a measured FPS guarantee.
@@ -279,3 +279,19 @@ reduces readout size; its position remains editable in Virtual controls.
 Local host fixtures validate policies, resource retirement and installer/cache
 code. They do not measure Metal memory, Jetsam, SwiftUI updates, real PUP/PKG
 installation, or Attack on Titan 2 FPS on an iPhone.
+
+### Freed guest memory on iOS
+
+Freed guest RAM now uses Darwin `MADV_FREE` instead of `MADV_DONTNEED`.
+Darwin's DONTNEED deactivates pages without discarding their dirty contents;
+FREE tells the kernel those contents are disposable. Only entirely free host
+pages are discarded: a 16 KiB host page containing a live 4 KiB guest allocation
+is retained, and reused guest allocations are still zero-initialized.
+This allows reclamation after the game frees data; it cannot discard live game,
+JIT or GPU data, and does not impose a total-process memory cap.
+
+Automatic texture capacity and the iPhone 8 Plus preset now use 128 entries on
+known devices with at most 3 GiB RAM. Existing explicit 256/512 selections stay
+in effect; choose the preset again and restart Tsubomi to use the smaller cache.
+Texture uploads may increase when revisiting a scene. No on-device reduction in
+MB or sustained FPS has been measured for these changes yet.

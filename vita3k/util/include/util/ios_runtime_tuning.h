@@ -23,7 +23,7 @@ constexpr int shader_workers(int requested, int logical_cores) {
 constexpr int texture_entries(int requested, int memory_mib) {
     if (requested == 128 || requested == 256 || requested == 512)
         return requested;
-    return memory_mib > 0 && memory_mib <= 3072 ? 256 : 512;
+    return memory_mib > 0 && memory_mib <= 3072 ? 128 : 512;
 }
 // Hysteresis prevents frequent allocation/free when texture sizes fluctuate.
 constexpr bool shrink_staging(unsigned long long capacity, unsigned long long required,

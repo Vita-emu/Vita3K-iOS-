@@ -186,7 +186,7 @@ struct SettingsView: View {
             Button("Use iPhone 8 Plus memory settings") {
                 jitCacheMiB = 12
                 shaderWorkers = 1
-                textureCacheEntries = 256
+                textureCacheEntries = 128
                 trimStagingBuffers = true
                 model.useLowerMemoryPreset()
             }
@@ -200,7 +200,7 @@ struct SettingsView: View {
             Text("JIT & Memory")
         } footer: {
             Text("""
-                Saved immediately. Close and reopen Tsubomi to apply these settings; no rebuild is needed.                 Automatic uses 12 MiB per JIT thread and 256 cached textures on a 3 GB phone.                 JIT cache is translated code, not all RAM used by a thread. Smaller caches save memory but can cause recompilation.                 Shader threads control background GPU compilation, not the game's CPU core count; fewer use less memory but compile more slowly.                 A smaller texture cache may cause extra uploads. Upload buffer trimming releases oversized temporary GPU buffers after reuse becomes safe.                 These limits do not cap total app RAM or guarantee 30 FPS.
+                Saved immediately. Close and reopen Tsubomi to apply these settings; no rebuild is needed.                 Automatic uses 12 MiB per JIT thread and 128 cached textures on a 3 GB phone.                 JIT cache is translated code, not all RAM used by a thread. Smaller caches save memory but can cause recompilation.                 Shader threads control background GPU compilation, not the game's CPU core count; fewer use less memory but compile more slowly.                 A smaller texture cache may cause extra uploads. Upload buffer trimming releases oversized temporary GPU buffers after reuse becomes safe.                 These limits do not cap total app RAM or guarantee 30 FPS.
                 """)
         }
     }

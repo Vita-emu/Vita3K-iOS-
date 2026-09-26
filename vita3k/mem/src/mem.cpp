@@ -521,6 +521,25 @@ Block alloc_block(MemState &mem, uint32_t size, const char *name, Address start_
     });
 }
 
+// Called only for whole host pages with no remaining guest allocations.
+static void decommit_guest_pages(uint8_t *memory, uint32_t size) {
+#ifdef _WIN32
+    const BOOL ret = VirtualFree(memory, size, MEM_DECOMMIT);
+    LOG_CRITICAL_IF(!ret, "VirtualFree failed: {}", get_error_msg());
+#else
+    int ret = mprotect(memory, size, PROT_NONE);
+    LOG_CRITICAL_IF(ret == -1, "mprotect failed: {}", get_error_msg());
+#ifdef VITA3K_PLATFORM_IOS
+    // Darwin DONTNEED only deactivates pages; it can retain their dirty data.
+    // FREE discards data the guest has released. alloc_inner zeroes it on reuse.
+    ret = madvise(memory, size, MADV_FREE);
+#else
+    ret = madvise(memory, size, MADV_DONTNEED);
+#endif
+    LOG_CRITICAL_IF(ret == -1, "madvise failed: {}", get_error_msg());
+#endif
+}
+
 void free(MemState &state, Address address) {
     const std::lock_guard<std::mutex> lock(state.generation_mutex);
     const uint32_t page_num = address / STANDARD_PAGE_SIZE;
@@ -555,32 +574,14 @@ void free(MemState &state, Address address) {
                 batch_start = host_page;
             batch_size += state.host_page_size;
         } else if (batch_size > 0) {
-            uint8_t *memory = &state.memory[batch_start];
-#ifdef _WIN32
-            const BOOL ret = VirtualFree(memory, batch_size, MEM_DECOMMIT);
-            LOG_CRITICAL_IF(!ret, "VirtualFree failed: {}", get_error_msg());
-#else
-            int ret = mprotect(memory, batch_size, PROT_NONE);
-            LOG_CRITICAL_IF(ret == -1, "mprotect failed: {}", get_error_msg());
-            ret = madvise(memory, batch_size, MADV_DONTNEED);
-            LOG_CRITICAL_IF(ret == -1, "madvise failed: {}", get_error_msg());
-#endif
+            decommit_guest_pages(&state.memory[batch_start], batch_size);
             batch_size = 0;
         }
         host_page = host_page_end;
     }
 
     if (batch_size > 0) {
-        uint8_t *memory = &state.memory[batch_start];
-#ifdef _WIN32
-        const BOOL ret = VirtualFree(memory, batch_size, MEM_DECOMMIT);
-        LOG_CRITICAL_IF(!ret, "VirtualFree failed: {}", get_error_msg());
-#else
-        int ret = mprotect(memory, batch_size, PROT_NONE);
-        LOG_CRITICAL_IF(ret == -1, "mprotect failed: {}", get_error_msg());
-        ret = madvise(memory, batch_size, MADV_DONTNEED);
-        LOG_CRITICAL_IF(ret == -1, "madvise failed: {}", get_error_msg());
-#endif
+        decommit_guest_pages(&state.memory[batch_start], batch_size);
     }
 }
 

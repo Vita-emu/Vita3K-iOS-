@@ -102,10 +102,10 @@ int main() {
     assert(shader_workers(2, 0) == 1);
     assert(shader_workers(-1, 6) == 0);
     assert(shader_workers(5, 6) == 0);
-    assert(texture_entries(0, 3072) == 256);
+    assert(texture_entries(0, 3072) == 128);
     assert(texture_entries(0, 3073) == 512);
     assert(texture_entries(0, 0) == 512);
-    assert(texture_entries(-100, 3072) == 256);
+    assert(texture_entries(-100, 3072) == 128);
     for (int valid : {128, 256, 512}) assert(texture_entries(valid, 3072) == valid);
     constexpr uint64_t mib = 1024 * 1024;
     assert(shrink_staging(16 * mib, 4 * mib, 240, 120));
