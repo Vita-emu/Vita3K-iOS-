@@ -254,18 +254,24 @@ void ScreenRenderer::create_swapchain() {
     select_present_mode();
 
     surface_capabilities = state.physical_device.getSurfaceCapabilitiesKHR(surface);
+    auto *frame_host = static_cast<renderer::State &>(state).frame;
+    window_extent = vk::Extent2D{
+        static_cast<uint32_t>(frame_host->drawable_width()),
+        static_cast<uint32_t>(frame_host->drawable_height())
+    };
 
     if (surface_capabilities.currentExtent.width != std::numeric_limits<uint32_t>::max()) {
         extent = surface_capabilities.currentExtent;
     } else {
-        auto *frame_host = static_cast<renderer::State &>(state).frame;
-        extent.width = std::clamp<uint32_t>(static_cast<uint32_t>(frame_host->drawable_width()), surface_capabilities.minImageExtent.width, surface_capabilities.maxImageExtent.width);
-        extent.height = std::clamp<uint32_t>(static_cast<uint32_t>(frame_host->drawable_height()), surface_capabilities.minImageExtent.height, surface_capabilities.maxImageExtent.height);
+        extent.width = std::clamp<uint32_t>(window_extent.width, surface_capabilities.minImageExtent.width, surface_capabilities.maxImageExtent.width);
+        extent.height = std::clamp<uint32_t>(window_extent.height, surface_capabilities.minImageExtent.height, surface_capabilities.maxImageExtent.height);
     }
 
     if (extent.width == 0 || extent.height == 0)
         return;
 
+    LOG_INFO("Swapchain extent: {}x{}, window: {}x{}", extent.width, extent.height,
+        window_extent.width, window_extent.height);
     swapchain_size = surface_capabilities.minImageCount + 1;
     if (surface_capabilities.maxImageCount != 0)
         swapchain_size = std::min(swapchain_size, surface_capabilities.maxImageCount);
@@ -745,8 +751,10 @@ bool ScreenRenderer::surface_matches_window_size() {
     if (frame_host->drawable_width() == 0 || frame_host->drawable_height() == 0)
         return true;
 
-    return extent.width == static_cast<uint32_t>(frame_host->drawable_width())
-        && extent.height == static_cast<uint32_t>(frame_host->drawable_height());
+    // Comparing to the Vulkan extent loops forever when the driver clamps or
+    // scales the SDL size: every frame waits idle and recreates the swapchain.
+    return window_extent.width == static_cast<uint32_t>(frame_host->drawable_width())
+        && window_extent.height == static_cast<uint32_t>(frame_host->drawable_height());
 }
 
 } // namespace renderer::vulkan

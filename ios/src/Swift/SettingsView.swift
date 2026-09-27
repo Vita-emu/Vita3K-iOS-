@@ -29,6 +29,7 @@ struct SettingsView: View {
     @AppStorage("tsubomi.guestMemoryMiB") private var guestMemoryMiB = 768
     @AppStorage("tsubomi.precompileShaders") private var precompileShaders = false
     @AppStorage("tsubomi.jitCacheMiB") private var jitCacheMiB = 0
+    @AppStorage("tsubomi.cpuExecutionThreads") private var cpuExecutionThreads = 0
     @AppStorage("tsubomi.shaderWorkers") private var shaderWorkers = 0
     @AppStorage("tsubomi.textureCacheEntries") private var textureCacheEntries = 0
     @AppStorage("tsubomi.trimStagingBuffers") private var trimStagingBuffers = true
@@ -206,6 +207,14 @@ struct SettingsView: View {
                 }
                 LabeledContent("Active backend", value: Bridge.cpuRequiresJIT ? "Dynarmic JIT" : "IR Interpreter")
                 if cpuBackend == 0 {
+                    Picker("CPU / JIT execution threads", selection: $cpuExecutionThreads) {
+                        Text("Automatic (OS scheduling)").tag(0)
+                        ForEach(1...8, id: \.self) { value in
+                            Text("Up to \(value)").tag(value)
+                        }
+                    }
+                    LabeledContent("Host logical CPUs", value: "\(ProcessInfo.processInfo.activeProcessorCount)")
+                    LabeledContent("JIT compiler", value: "Runs in guest CPU threads")
                     Picker("JIT cache per guest thread", selection: $jitCacheMiB) {
                         Text("Automatic").tag(0)
                         ForEach([4, 8, 12, 16, 24, 32], id: \.self) { value in
@@ -220,10 +229,13 @@ struct SettingsView: View {
             Text("CPU")
         } footer: {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Backend and JIT cache changes take effect after closing and reopening Tsubomi. Active backend shows the backend this process is using.")
+                Text("Backend, execution thread limit and JIT cache changes take effect after closing and reopening Tsubomi. Active backend shows the backend this process is using.")
                 Text("Dynarmic JIT requires JIT permission. CPU optimizations apply on the next game launch.")
                 Text("IR Interpreter is experimental and slower. It supports a subset of ARM/Thumb integer instructions; VFP, NEON and exclusive instructions are not supported. Unsupported instructions stop execution and are recorded in the log.")
-                Text("The JIT cache size is per guest thread, not a limit on total CPU memory. Automatic selects the size for this device.")
+                Text("Automatic lets iOS schedule all runnable guest CPU threads. An explicit limit caps simultaneous JIT execution and translation, clamped to the host CPU count. It does not select physical cores, create extra game threads or change the guest affinity mask.")
+                Text("Limited mode uses short instruction slices so waiting game threads can make progress. It adds scheduling overhead and may reduce FPS. Start with Automatic; compare the same scene before keeping a limit. Audio, rendering and shader workers are outside this limit.")
+                Text("Dynarmic compiles missing code blocks on the guest thread that needs them. There is no separate JIT compiler pool to assign cores to. More execution threads cannot split a single game thread across cores.")
+                Text("The JIT cache size is per guest thread, not a limit on total CPU memory. Automatic selects the size for this device. Raising it may reduce recompilation but increases memory use.")
             }
         }
     }
@@ -261,10 +273,11 @@ struct SettingsView: View {
 
     private var shaderSection: some View {
         Section {
+            LabeledContent("GPU core allocation", value: "Managed by Metal / iOS")
             Toggle("Shader disk cache", isOn: $model.shaderCache)
             Toggle("Async pipeline compilation", isOn: $model.asyncPipelineCompilation)
             if !model.isPerGame {
-                Picker("Shader compiler threads", selection: $shaderWorkers) {
+                Picker("GPU shader compiler CPU threads", selection: $shaderWorkers) {
                     Text("Automatic").tag(0)
                     ForEach(1...4, id: \.self) { value in Text("\(value)").tag(value) }
                 }
@@ -277,6 +290,7 @@ struct SettingsView: View {
         } footer: {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Shader disk cache reuses compiled shaders between launches. Async compilation can reduce pauses, but objects may be missing until their pipeline is ready. Turn it off when checking missing graphics.")
+                Text("Shader compiler workers run on the CPU and prepare graphics pipelines. They are separate from CPU JIT execution. Metal schedules 3D work on the GPU; this renderer cannot enable a chosen number of physical GPU cores.")
                 Text("Compiler thread count and precompilation require an app restart. More threads can increase CPU and memory use; precompilation needs disk caching and can lengthen startup.")
                 Text("Shader settings selected in the library apply on the next game launch.")
             }

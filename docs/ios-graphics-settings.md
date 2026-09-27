@@ -15,6 +15,7 @@ Core settings flow through SettingsModel, TsubomiBridge, native dictionaries, an
 | Setting | Consumer / effect | Apply time |
 | --- | --- | --- |
 | CPU backend | ios_runtime::uses_jit selects Dynarmic or experimental IR interpreter | App restart |
+| CPU / JIT execution threads | FIFO admission gate around Dynarmic Run/Step; explicit limits enable bounded instruction slices | App restart |
 | JIT cache | Dynarmic per-thread cache budget | App restart |
 | JIT CPU optimizations | current_config.cpu_opt, CPU initialization | Next game launch |
 | Guest RAM | MemState guest_bytes_limit; allocations can fail at the budget | App restart |
@@ -45,3 +46,43 @@ The iPhone 8 Plus preset was removed. Reset memory settings now resets only gues
 Host fixtures exercise settings propagation, cache identity, transfer ordering and present-mode selection with recording backends. They do not render commercial games or emulate Metal. SwiftUI appearance, full iOS compilation, graphics correctness and 40-to-60 FPS improvement remain device/CI checks. Lower resolution can reduce GPU work, but cannot remove CPU, shader-compilation, bandwidth or thermal limits. The guest memory budget does not cap process RSS.
 
 For a remaining black screen or rainbow surface, capture the title ID, app commit, relevant graphics settings, screenshot and tsubomi.log. Compare the same scene with only one setting changed. Keep async compilation off while determining whether missing geometry is a shader-compilation artifact.
+
+## CPU / JIT concurrency and GPU allocation
+
+`CPU / JIT execution threads` is a concurrency ceiling, not physical core affinity.
+Automatic (0) preserves the existing OS scheduler and does not enable instruction
+counting or acquire a scheduler mutex. Explicit values 1–8 are clamped to the host
+logical CPU count. Each admitted Dynarmic run gets a 10,000-instruction budget
+(checked at JIT block boundaries); waiting runs enter in FIFO order. The permit is
+released before HLE calls, so a guest thread waiting for an event cannot hold the
+only slot needed by the signalling thread. Run retries and single stepping use the
+same gate. IR Interpreter, HLE services, audio, rendering and shader workers are
+outside this limit. Thread/cache creation and memory budgets remain unchanged.
+
+This is an experimental tuning option. Extra scheduling and instruction counting
+can lower performance. Keep Automatic as the baseline and compare the same scene;
+setting a larger limit does not split a serial game thread or guarantee higher FPS.
+Dynarmic translates missing blocks synchronously on each guest CPU thread. There
+is no independent JIT compiler worker count in this implementation. The `core=`
+number in JIT allocation logs is an exclusive-monitor identifier, not an iPhone
+physical core number.
+
+GPU shader compiler CPU threads (1–4 or Automatic) control the existing pipeline
+worker pool. They prepare graphics work on the CPU. Metal/driver scheduling owns
+physical GPU execution; no GPU-core-count selector is exposed. See Apple's
+[task scheduling guidance](https://developer.apple.com/library/archive/documentation/Performance/Conceptual/power_efficiency_guidelines_osx/PrioritizeWorkAtTheTaskLevel.html)
+for the distinction between task priority and OS scheduling.
+
+The supplied Attack on Titan log shows repeated swapchain creation, but does not
+record both window and Vulkan extents. The renderer now keeps the SDL window size
+separate from the driver's chosen surface size: differing/clamped extents must not
+trigger a device-wide idle and rebuild on every frame. Real window resizes,
+out-of-date/surface-lost results and V-Sync changes still request rebuilds. New
+swapchain logs record both sizes to confirm the diagnosis on device. Host fixtures
+cover fixed and clamped extents, rotation, zero-size windows and explicit rebuilds.
+
+The screenshots also show picture-in-picture video and the live log. For a
+repeatable performance comparison, close the video and hide the live log, then
+compare identical game scenes and settings. This does not establish that either
+caused the reported slowdown. Distorted in-game HUD graphics remain unverified on
+a device; the concurrency option is not a graphics compatibility fix.

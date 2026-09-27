@@ -45,6 +45,9 @@ public:
     vk::SurfaceFormatKHR surface_format;
     vk::PresentModeKHR present_mode{};
     vk::Extent2D extent;
+    // SDL pixels can differ from the surface extent imposed by MoltenVK.
+    // Track resize events against the window size used to create this swapchain.
+    vk::Extent2D window_extent{};
     uint32_t swapchain_size{};
     std::vector<vk::Image> swapchain_images;
     std::vector<vk::ImageView> swapchain_views;

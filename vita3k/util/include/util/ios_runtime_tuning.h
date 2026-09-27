@@ -12,6 +12,7 @@ struct Tuning {
     CPUBackend cpu_backend = CPUBackend::Jit;
     int guest_memory_mib = 768;
     int jit_cache_mib = 0;
+    int cpu_execution_threads = 0;
     int shader_workers = 0;
     int texture_entries = 0;
     bool trim_staging_buffers = true;
@@ -28,6 +29,12 @@ constexpr int guest_memory_mib(int requested) {
 }
 constexpr int jit_cache_mib(int requested) {
     return requested == 4 || requested == 8 || requested == 12 || requested == 16 || requested == 24 || requested == 32 ? requested : 0;
+}
+// Zero preserves unrestricted host scheduling. Explicit limits cap concurrent
+// guest JIT runs, not physical cores or the number of guest threads created.
+constexpr int cpu_execution_threads(int requested, int logical_cores) {
+    const int available = logical_cores > 0 ? logical_cores : 1;
+    return requested >= 1 && requested <= 8 ? (requested < available ? requested : available) : 0;
 }
 constexpr int shader_workers(int requested, int logical_cores) {
     const int available = logical_cores > 0 ? logical_cores : 1;

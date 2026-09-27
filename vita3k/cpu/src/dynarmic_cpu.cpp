@@ -19,6 +19,7 @@
 #include <cpu/impl/dynarmic_cpu.h>
 #include <cpu/ios_jit_policy.h>
 #include <cpu/state.h>
+#include <util/execution_gate.h>
 #include <util/ios_runtime_tuning.h>
 #include <util/log.h>
 
@@ -40,6 +41,19 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
+
+#if defined(VITA3K_PLATFORM_IOS)
+static util::ExecutionGate &ios_cpu_execution_gate() {
+    static util::ExecutionGate gate([] {
+        const int cores = static_cast<int>(std::thread::hardware_concurrency());
+        const int limit = ios_runtime::cpu_execution_threads(ios_runtime::tuning.cpu_execution_threads, cores);
+        LOG_INFO("iOS CPU/JIT execution limit: {} (0 = OS scheduling), host logical CPUs: {}", limit, cores);
+        return static_cast<unsigned>(limit);
+    }());
+    return gate;
+}
+#endif
 
 #if defined(VITA3K_PLATFORM_IOS)
 std::size_t ios_jit_code_cache_size() {
@@ -401,6 +415,12 @@ public:
     void AddTicks(uint64_t ticks) override {}
 
     uint64_t GetTicksRemaining() override {
+#if defined(VITA3K_PLATFORM_IOS)
+        // Bounded guest-instruction slices are essential when limiting
+        // concurrency: a spin-wait must yield to the thread it is waiting for.
+        if (ios_cpu_execution_gate().enabled())
+            return 10000;
+#endif
         return 1ull << 60;
     }
 };
@@ -429,6 +449,9 @@ std::unique_ptr<Dynarmic::A32::Jit> DynarmicCPU::make_jit() {
     config.processor_id = core_id;
     config.optimizations = cpu_opt ? Dynarmic::all_safe_optimizations : Dynarmic::no_optimizations;
     config.enable_cycle_counting = false;
+#if defined(VITA3K_PLATFORM_IOS)
+    config.enable_cycle_counting = ios_cpu_execution_gate().enabled();
+#endif
 
 #if defined(VITA3K_PLATFORM_IOS) && defined(__aarch64__)
     // StikDebug services Oaknut's BRK #0xf00d while the JIT constructor maps
@@ -509,6 +532,11 @@ int DynarmicCPU::run() {
     parent->svc_called = false;
     Dynarmic::HaltReason halt_reason;
     do {
+#if defined(VITA3K_PLATFORM_IOS)
+        // Translation and execution share the guest thread. Release the slot
+        // before returning to ThreadState, where blocking HLE calls execute.
+        util::ExecutionGate::Permit permit(ios_cpu_execution_gate());
+#endif
         halt_reason = jit->Run();
     } while ((halt_reason == Dynarmic::HaltReason::Step) || (halt_reason == Dynarmic::HaltReason::CacheInvalidation));
 
@@ -523,6 +551,9 @@ int DynarmicCPU::step() {
         return -1;
     }
     parent->svc_called = false;
+#if defined(VITA3K_PLATFORM_IOS)
+    util::ExecutionGate::Permit permit(ios_cpu_execution_gate());
+#endif
     jit->Step();
     return 0;
 }
