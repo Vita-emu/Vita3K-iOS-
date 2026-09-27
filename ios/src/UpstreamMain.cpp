@@ -30,6 +30,7 @@
 #include <packages/archive.h>
 #include <packages/functions.h>
 #include <packages/license.h>
+#include <packages/license_file.h>
 #include <packages/pkg.h>
 #include <packages/sfo.h>
 #include <compat/functions.h>
@@ -92,6 +93,7 @@
 #include <utility>
 #include <string>
 #include <string_view>
+#include <stdexcept>
 #include <thread>
 #include <vector>
 
@@ -2061,6 +2063,66 @@ void start_library_archive_import(EmuEnvState &emuenv,
     }).detach();
 }
 
+void start_license_import(EmuEnvState &emuenv, const std::string &path) {
+    if (g_import_job && !g_import_job->done.load()) {
+        vita3k_ios_report_import_result("Another import is still running", false);
+        return;
+    }
+    auto job = std::make_shared<ImportJob>();
+    g_import_job = job;
+    std::thread([job, path, &emuenv] {
+        pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
+        try {
+            if (!copy_license(emuenv, fs::path(path)))
+                throw std::runtime_error("Invalid work.bin/RIF license");
+            const auto title_id = emuenv.license_title_id;
+            const auto content_id = emuenv.license_content_id;
+            std::vector<fs::path> roots{ emuenv.vita_fs_path / "ux0/app" / title_id,
+                emuenv.vita_fs_path / "ux0/patch" / title_id };
+            const auto dlc_root = emuenv.vita_fs_path / "ux0/addcont" / title_id;
+            if (fs::is_directory(dlc_root)) {
+                for (const auto &entry : fs::directory_iterator(dlc_root))
+                    if (fs::is_directory(entry.path()) && !fs::is_symlink(entry.path()))
+                        roots.push_back(entry.path());
+            }
+            unsigned decrypted = 0;
+            for (const auto &root : roots) {
+                if (!fs::exists(root / "sce_pfs") || fs::is_symlink(root))
+                    continue;
+                const auto sfo_path = root / "sce_sys/param.sfo";
+                if (!fs::is_regular_file(sfo_path) || fs::file_size(sfo_path) > 16 * 1024 * 1024)
+                    throw std::runtime_error("Installed encrypted content has invalid metadata");
+                fs::ifstream input(sfo_path, std::ios::binary);
+                const std::vector<std::uint8_t> bytes((std::istreambuf_iterator<char>(input)), {});
+                sfo::SfoAppInfo app;
+                sfo::get_param_info(app, bytes, 1);
+                if (app.app_title_id != title_id)
+                    throw std::runtime_error("Installed encrypted content has mismatched title metadata");
+                if (app.app_content_id != content_id)
+                    continue; // DLC licenses are specific to each Content ID.
+                job->progress.store(-2);
+                if (!decrypt_install_nonpdrm(emuenv, fs::path(path), root, false))
+                    throw std::runtime_error("License installed, but content decryption failed; encrypted content was kept");
+                ++decrypted;
+            }
+            job->success = true;
+            job->message = decrypted ? "License installed; matching content decrypted" : "License installed";
+        } catch (const std::exception &error) {
+            job->message = std::string("License import: ") + error.what();
+        }
+        try {
+            job->apps_rescanned = app::scan_apps(emuenv);
+            if (job->apps_rescanned)
+                job->games_snapshot = native_games(emuenv);
+        } catch (const std::exception &error) {
+            LOG_ERROR("Post-license scan failed: {}", error.what());
+        }
+        boost::system::error_code ignored;
+        fs::remove(fs::path(path), ignored);
+        job->done.store(true);
+    }).detach();
+}
+
 void start_import(EmuEnvState &emuenv, const std::string &path, const bool firmware) {
     if (!firmware && !firmware_setup_complete(emuenv)) {
         vita3k_ios_report_import_result(
@@ -2100,7 +2162,8 @@ void start_import(EmuEnvState &emuenv, const std::string &path, const bool firmw
                         job->message = "Required firmware files are missing. Choose the official PSVUPDAT.PUP or PSP2UPDAT.PUP.";
                     }
                 }
-            } else if (fs::path(path).extension() == ".pkg" || fs::path(path).extension() == ".PKG") {
+            } else if (!fs::is_directory(fs::path(path))
+                && (fs::path(path).extension() == ".pkg" || fs::path(path).extension() == ".PKG")) {
                 std::string zrif = find_pkg_zrif(fs::path(path), emuenv.vita_fs_path);
                 if (zrif.empty()) {
                     job->message = "PKG needs a matching license. Import its work.bin first, then select the .pkg again.";
@@ -2116,9 +2179,38 @@ void start_import(EmuEnvState &emuenv, const std::string &path, const bool firmw
                     job->message = job->success ? "PKG installed" : "PKG install failed (see tsubomi.log)";
                 }
             } else {
-                const auto result = packages::install_archive_transactionally(
-                    std::filesystem::path(path), std::filesystem::path(emuenv.vita_fs_path.string()),
-                    [job](uint32_t percent) { job->progress.store(static_cast<int>(percent)); });
+                const auto prepare = [&emuenv, job](const packages::ArchiveApplicationInfo &application,
+                                         const std::filesystem::path &payload, std::string &error) {
+                    const auto title = payload / application.install_target;
+                    if (!std::filesystem::exists(title / "sce_pfs"))
+                        return true; // Already-decrypted VPK/homebrew.
+                    if (!packages::valid_content_id(application.content_id)) {
+                        error = "NoNpDrm content has an invalid Content ID: " + application.title_id;
+                        return false;
+                    }
+                    const auto relative_license = std::filesystem::path("ux0/license") / application.title_id
+                        / (application.content_id + ".rif");
+                    auto license = payload / relative_license;
+                    if (!std::filesystem::exists(license))
+                        license = std::filesystem::path(emuenv.vita_fs_path.string()) / relative_license;
+                    std::array<std::uint8_t, 512> bytes{};
+                    std::string content_id;
+                    if (!packages::read_license_file(license, bytes, content_id) || content_id != application.content_id) {
+                        error = "NoNpDrm needs a matching license. Include sce_sys/package/work.bin or import its work.bin first, then import the game again: " + application.title_id;
+                        return false;
+                    }
+                    job->progress.store(-2);
+                    if (!decrypt_install_nonpdrm(emuenv, fs::path(license.string()), fs::path(title.string()), false)) {
+                        error = "NoNpDrm decryption failed for " + application.title_id + "; the previous installation was kept";
+                        return false;
+                    }
+                    return true;
+                };
+                const auto progress = [job](uint32_t percent) { job->progress.store(static_cast<int>(percent)); };
+                const auto root = std::filesystem::path(emuenv.vita_fs_path.string());
+                const auto result = std::filesystem::is_directory(path)
+                    ? packages::install_directory_transactionally(path, root, progress, prepare)
+                    : packages::install_archive_transactionally(path, root, progress, prepare);
                 job->success = result.success;
                 job->installed_applications = result.installed_applications;
                 job->message = result.success
@@ -2145,15 +2237,15 @@ void start_import(EmuEnvState &emuenv, const std::string &path, const bool firmw
             }
         }
         boost::system::error_code cleanup_error;
-        fs::remove(fs::path(path), cleanup_error);
+        fs::remove_all(fs::path(path), cleanup_error);
         LOG_INFO("iOS import finished (success={}): {}", job->success, job->message);
         job->done.store(true);
     }).detach();
 }
 
 // After a successful game install, offer to import a NoNpDrm work.bin for the
-// first retail full-game (`gd`) root that has no `.rif` license yet. DLC and
-// patches ride on their base game's license, so they are skipped.
+// first retail full-game (`gd`) root that has no `.rif` license yet. Patches
+// share the base Content ID; DLC uses its own matching license.
 void maybe_prompt_license_import(EmuEnvState &emuenv,
     const std::vector<packages::ArchiveApplicationInfo> &applications) {
     for (const auto &application : applications) {
@@ -2428,10 +2520,22 @@ std::optional<AppLaunchRequest> choose_boot_title(EmuEnvState &emuenv) {
                 if (!share_path.empty())
                     vita3k_ios_share_file(share_path);
                 if (success && rescan_apps && !was_firmware)
+                    for (const auto &application : installed_applications)
+                        emuenv.license.rif.erase(application.title_id);
+                if (success && rescan_apps && !was_firmware)
                     maybe_prompt_license_import(emuenv, installed_applications);
             }
 
             if (auto action = vita3k_ios_take_frontend_action()) {
+                if (g_import_job && !g_import_job->done.load()
+                    && (action->kind == Vita3KIOSFrontendActionKind::Launch
+                        || action->kind == Vita3KIOSFrontendActionKind::Refresh
+                        || action->kind == Vita3KIOSFrontendActionKind::ApplySettings
+                        || action->kind == Vita3KIOSFrontendActionKind::DeleteGame
+                        || action->kind == Vita3KIOSFrontendActionKind::Quit)) {
+                    vita3k_ios_report_import_result("Wait for the current import to finish", false);
+                    return;
+                }
                 switch (action->kind) {
                 case Vita3KIOSFrontendActionKind::Launch:
                     if (!firmware_setup_complete(emuenv)) {
@@ -2491,39 +2595,9 @@ std::optional<AppLaunchRequest> choose_boot_title(EmuEnvState &emuenv) {
                     LOG_INFO("Importing firmware PUP: {}", action->app_path);
                     start_import(emuenv, action->app_path, true);
                     break;
-                case Vita3KIOSFrontendActionKind::ImportLicense: {
-                    LOG_INFO("Importing NoNpDrm work.bin license: {}", action->app_path);
-                    const bool copied = copy_license(emuenv, fs::path(action->app_path));
-                    // A NoNpDrm dump's ux0:app content is still PFS-encrypted on
-                    // disk; copying the .rif alone leaves eboot.bin/PNGs encrypted
-                    // (decrypt_fself fails, art won't decode). Decrypt the installed
-                    // title in place with the work.bin, exactly like desktop.
-                    bool decrypted = false;
-                    if (copied && !emuenv.license_title_id.empty()) {
-                        const fs::path title_path = emuenv.vita_fs_path / "ux0/app" / emuenv.license_title_id;
-                        boost::system::error_code exists_error;
-                        if (fs::exists(title_path, exists_error) && !exists_error) {
-                            try {
-                                decrypted = decrypt_install_nonpdrm(emuenv, fs::path(action->app_path), title_path);
-                            } catch (const std::exception &error) {
-                                LOG_ERROR("NoNpDrm content decrypt failed: {}", error.what());
-                            }
-                        }
-                    }
-                    boost::system::error_code cleanup_error;
-                    fs::remove(fs::path(action->app_path), cleanup_error);
-                    // Rescan so the (now decryptable) art and titles refresh without
-                    // an app restart.
-                    if (!app::init_apps_list(emuenv))
-                        LOG_ERROR("Failed to rescan apps after license import.");
-                    games = native_games(emuenv);
-                    vita3k_ios_update_library(games, native_settings(emuenv));
-                    vita3k_ios_report_import_result(
-                        copied ? (decrypted ? "License installed; content decrypted"
-                                            : "License installed")
-                               : "License import failed (see tsubomi.log)", copied);
+                case Vita3KIOSFrontendActionKind::ImportLicense:
+                    start_license_import(emuenv, action->app_path);
                     break;
-                }
                 case Vita3KIOSFrontendActionKind::ImportSave:
                     if (action->title_id.empty())
                         start_all_saves_import(emuenv, action->app_path);
