@@ -202,6 +202,7 @@ NS_SWIFT_NAME(Bridge)
 /// Document pickers. Each returns immediately; results arrive as a status
 /// toast or an alert.
 + (void)presentGameImportPicker;
++ (void)presentGameFolderImportPicker;
 + (void)presentLicenseImportPicker;
 + (void)presentSaveImportPickerForTitle:(NSString *)titleID
     NS_SWIFT_NAME(presentSaveImportPicker(titleID:));

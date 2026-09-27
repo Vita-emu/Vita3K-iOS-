@@ -77,6 +77,7 @@ id bridge_settings();
 
 // Document pickers owned by NativeFrontend.mm.
 void present_game_picker();
+void present_game_folder_picker();
 void present_license_import_picker();
 void present_save_import_picker(NSString *title_id);
 void present_all_save_import_picker();
