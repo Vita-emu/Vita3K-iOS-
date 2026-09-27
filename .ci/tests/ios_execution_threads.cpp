@@ -65,7 +65,10 @@ int main(int argc, char **argv) {
 
     std::atomic<int> active{ 0 }, peak{ 0 }, completed{ 0 };
     std::vector<std::future<void>> jobs;
-    for (int worker = 0; worker < 8; ++worker) {
+    // Attack on Titan creates many guest workers. Exercise a much larger
+    // waiting queue than the admitted set, including direct slot handoffs.
+    constexpr int workers = 32;
+    for (int worker = 0; worker < workers; ++worker) {
         jobs.push_back(std::async(std::launch::async, [&] {
             DynarmicCPU cpu;
             cpu.jit->execute = [&] {
@@ -88,7 +91,7 @@ int main(int argc, char **argv) {
     }
     for (auto &job : jobs)
         job.get();
-    assert(completed == 8 && active == 0 && peak > 0);
+    assert(completed == workers && active == 0 && peak > 0);
 
     // A failed runner must not leak an admission slot, including single-step.
     DynarmicCPU cpu;

@@ -3171,8 +3171,15 @@ int main(int argc, char *argv[]) {
 
             if (next_scheduled_dump < std::size(scheduled_dump_at_ms)
                 && now_ms - watchdog_start_ms >= scheduled_dump_at_ms[next_scheduled_dump]) {
-                LOG_INFO("iOS guest watchdog snapshot firing at {}ms", scheduled_dump_at_ms[next_scheduled_dump]);
-                app::dump_guest_state(*emuenv, "scheduled iOS boot diagnostic");
+                // Inspecting every guest thread and synchronization primitive
+                // is useful for a stuck boot, but adds locks and log I/O to a
+                // healthy game. Consume the scheduled slot without dumping if
+                // frame submission is still progressing. Stall detection below
+                // and periodic memory headroom sampling remain unchanged.
+                if (last_setframe_seen == 0 || now_ms - last_setframe_change_ms >= 2000) {
+                    LOG_INFO("iOS guest watchdog snapshot firing at {}ms", scheduled_dump_at_ms[next_scheduled_dump]);
+                    app::dump_guest_state(*emuenv, "scheduled iOS boot diagnostic");
+                }
                 ++next_scheduled_dump;
             }
 

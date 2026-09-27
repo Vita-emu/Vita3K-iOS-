@@ -3,7 +3,6 @@
 #pragma once
 
 #include <condition_variable>
-#include <cstdint>
 #include <mutex>
 
 namespace util {
@@ -13,9 +12,17 @@ namespace util {
 class ExecutionGate {
     const unsigned limit;
     unsigned active = 0;
-    uint64_t next_ticket = 0, serving = 0;
     std::mutex mutex;
-    std::condition_variable changed;
+    // Each blocked caller owns its waiter on its stack. A released slot is
+    // handed directly to the oldest waiter, without waking all guest threads
+    // at every JIT slice (especially costly with many game worker threads).
+    struct Waiter {
+        std::condition_variable ready;
+        Waiter *next = nullptr;
+        bool admitted = false;
+    };
+    Waiter *first = nullptr;
+    Waiter *last = nullptr;
 
 public:
     explicit ExecutionGate(unsigned limit)
@@ -31,18 +38,34 @@ public:
             if (!gate.enabled())
                 return;
             std::unique_lock lock(gate.mutex);
-            const auto ticket = gate.next_ticket++;
-            gate.changed.wait(lock, [&] { return ticket == gate.serving && gate.active < gate.limit; });
-            ++gate.serving;
-            ++gate.active;
-            gate.changed.notify_all();
+            if (gate.active < gate.limit && !gate.first) {
+                ++gate.active;
+                return;
+            }
+            Waiter waiter;
+            if (gate.last)
+                gate.last->next = &waiter;
+            else
+                gate.first = &waiter;
+            gate.last = &waiter;
+            waiter.ready.wait(lock, [&] { return waiter.admitted; });
         }
         ~Permit() {
             if (!gate.enabled())
                 return;
             std::lock_guard lock(gate.mutex);
-            --gate.active;
-            gate.changed.notify_all();
+            if (gate.first) {
+                Waiter *waiter = gate.first;
+                gate.first = waiter->next;
+                if (!gate.first)
+                    gate.last = nullptr;
+                // Keep this slot reserved: a new arrival cannot steal it
+                // while the selected thread is waking up.
+                waiter->admitted = true;
+                waiter->ready.notify_one();
+            } else {
+                --gate.active;
+            }
         }
         Permit(const Permit &) = delete;
         Permit &operator=(const Permit &) = delete;

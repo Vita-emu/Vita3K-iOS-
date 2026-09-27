@@ -190,3 +190,55 @@ Startup now also sets Apple's documented `MTL_HUD_ENABLED` environment variable
 before renderer initialization, matching the saved preference. This is a
 second documented activation route, not confirmation that the OS accepted it;
 provisioning/version restrictions still apply. Device confirmation is pending.
+
+## Attack on Titan (PCSE00812): CPU scheduling follow-up
+
+The supplied `d2b8898` session uses an Apple A11, four concurrent guest CPU
+threads, 4 MiB JIT caches per guest thread, a 512 MiB guest allocation budget,
+512 texture entries and native rendering resolution. The Metal HUD is now
+visible. Its GPU times in the supplied screenshots are substantially shorter
+than the presentation intervals. Many low-FPS log intervals also contain no
+pipeline compilation, texture uploads, surface copies or swapchain rebuilds.
+This points toward CPU-side work or synchronization as a useful next target;
+it does not identify the exact cost of guest logic, translation or driver work.
+
+Two changes reduce avoidable host work without enlarging the caches:
+
+- The explicit CPU concurrency limit now hands a released slot directly to the
+  oldest waiting guest thread. It wakes one waiter instead of broadcasting to
+  every waiting thread on admission and release. Waiters live on the caller's
+  stack; there is no heap queue or extra worker thread. The cap, FIFO admission,
+  bounded instruction slices and release before blocking HLE calls are retained.
+- Scheduled boot diagnostics skip full guest-state dumps when frame submission
+  is progressing. These dumps inspect threads and synchronization primitives,
+  taking locks and writing many log records. Stuck boots still get early dumps,
+  the eight-second stall detector is retained, and the watchdog still retires
+  after its boot observation window. Renderer summaries are unchanged.
+
+Pipeline cache saves were also inspected: they are scheduled after compilation,
+so this change leaves persistence intact. Draws, visible game UI, game timing and
+memory budgets are unchanged. No title-specific frame skipping or rendering
+shortcut is enabled.
+
+### Compare on the device
+
+1. First test the same training route, camera and settings on the new build.
+   Warm the scene once, then record a second pass. Keep PiP and live logging off
+   for the comparison; use the same Metal HUD state in both runs.
+2. Compare the current four-thread limit with **Advanced Settings → CPU & JIT →
+   Concurrent CPU threads → Automatic**, restarting the app between runs.
+   Automatic bypasses the admission gate and its instruction-slice accounting;
+   it lets iOS schedule guest threads. Four is a concurrency cap, not a request
+   for four performance cores. It can reduce throughput even with the improved
+   wakeup policy, depending on the game's runnable threads.
+3. Keep the current JIT/cache/RAM values for that comparison. Changing those at
+   the same time would hide whether scheduling helped. A small JIT cache can
+   require more translation, but this log does not measure eviction cost.
+4. For a remaining slowdown, capture the same route with renderer **Summary**
+   enabled, including the moment the mission banner appears. Include the new
+   log and Metal HUD screenshots. CPU profiling on an actual device is still
+   needed to separate guest execution, JIT compilation and renderer CPU work.
+
+Host concurrency tests verify safety and progress. Host admission benchmarks
+measure synchronization overhead only; they cannot establish an iPhone FPS gain
+or that Attack on Titan maintains its target frame rate.
