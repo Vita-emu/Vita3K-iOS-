@@ -25,6 +25,7 @@
 #include <util/align.h>
 #include <util/ios_runtime_tuning.h>
 #include <util/log.h>
+#include <util/render_diagnostics.h>
 #ifdef VITA3K_PLATFORM_IOS
 #include <SDL3/SDL_cpuinfo.h>
 #endif
@@ -352,6 +353,7 @@ bool TextureCache::init(const bool hashless_texture_cache, const fs::path &textu
 }
 
 void TextureCache::upload_texture(const SceGxmTexture &gxm_texture, MemState &mem) {
+    render_diagnostics::add(render_diagnostics::TextureUploads);
     R_PROFILE(__func__);
 
     bool is_vulkan = (backend == renderer::Backend::Vulkan);

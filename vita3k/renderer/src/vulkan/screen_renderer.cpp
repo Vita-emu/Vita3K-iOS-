@@ -20,6 +20,7 @@
 #include "renderer/vulkan/state.h"
 #include "util/log.h"
 #include "vkutil/vkutil.h"
+#include <util/render_diagnostics.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -248,6 +249,7 @@ void ScreenRenderer::select_present_mode() {
 }
 
 void ScreenRenderer::create_swapchain() {
+    render_diagnostics::add(render_diagnostics::Swapchains);
     // Selected here rather than once in setup(): the present mode is baked into
     // the swapchain, and a v-sync change rebuilds the swapchain without going
     // back through setup().

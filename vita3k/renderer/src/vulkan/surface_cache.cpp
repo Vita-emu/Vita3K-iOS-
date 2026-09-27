@@ -27,6 +27,7 @@
 
 #include <util/align.h>
 #include <util/log.h>
+#include <util/render_diagnostics.h>
 #include <util/vector_utils.h>
 
 #include <algorithm>
@@ -731,6 +732,7 @@ std::optional<TextureLookupResult> VKSurfaceCache::retrieve_color_surface_as_tex
             casted->texture.transition_to_discard(cmd_buffer, vkutil::ImageLayout::TransferDst);
         }
 
+        render_diagnostics::add(render_diagnostics::SurfaceCopies);
         casted->scene_timestamp = scene_timestamp;
 
         // Surface writes may have come from a render pass, shader interlock,

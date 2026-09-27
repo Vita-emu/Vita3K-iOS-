@@ -17,10 +17,12 @@
 
 #include <xxh3.h>
 
+#include <renderer/draw_safety.h>
 #include <renderer/types.h>
 #include <renderer/vulkan/functions.h>
 #include <renderer/vulkan/gxm_to_vulkan.h>
 #include <renderer/vulkan/state.h>
+#include <util/ios_runtime_tuning.h>
 
 #include <gxm/types.h>
 
@@ -256,6 +258,8 @@ void destroy(VKState &state, std::unique_ptr<RenderTarget> &rt) {
 
 bool create(std::unique_ptr<VertexProgram> &vp, VKState &state, const SceGxmProgram &program) {
     vp = std::make_unique<VertexProgram>();
+    if (ios_runtime::tuning.conservative_culling)
+        vp->can_skip_when_clipped = renderer::vertex_program_can_skip(program, SCE_GXM_PROGRAM_FLAG_BUFFER_STORE);
 
     if (program.program_flags & SCE_GXM_PROGRAM_FLAG_BUFFER_STORE)
         state.has_shader_store = true;

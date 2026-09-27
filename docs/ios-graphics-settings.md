@@ -86,3 +86,68 @@ repeatable performance comparison, close the video and hide the live log, then
 compare identical game scenes and settings. This does not establish that either
 caused the reported slowdown. Distorted in-game HUD graphics remain unverified on
 a device; the concurrency option is not a graphics compatibility fix.
+
+## Metal HUD and render diagnostics
+
+The Performance Overlay page exposes Apple's `MetalHUDForceEnabled` user default.
+Apple documents this programmatic route alongside Xcode, environment variables
+and Developer settings in [Monitoring your Metal app's graphics performance](https://developer.apple.com/documentation/xcode/monitoring-your-metal-apps-graphics-performance).
+The toggle requests the native HUD after restarting the process. It does not
+change signing/entitlements, use private selectors or promise availability on
+all iOS/provisioning combinations. The startup log records the request, not a
+claim that the OS displayed it. Native HUD GPU timings are independent of
+Tsubomi's guest-submit FPS display. Metal per-frame logging and encoder timing
+are not enabled by this setting.
+
+Renderer diagnostics are off by default and applied on app restart:
+
+| Mode | Output / cost |
+| --- | --- |
+| Off | No counter updates, clock sampling, shader sample formatting or reports |
+| Summary | Relaxed atomic event counters and two summary lines every 5 seconds; timers only around pipeline compilation |
+| Summary + shader compilation samples | Above, plus up to four newly compiled shader pairs per report interval, shared across compiler workers |
+
+Fixed-size counters replace neither existing error logs nor normal cache logs.
+The added instrumentation has no growing history, no background polling thread,
+no shader source/uniform dumps and no additional GPU fence waits. It still has
+nonzero overhead. Compile durations use host monotonic elapsed time, summed
+across workers; they are **not GPU timings or scheduled CPU time**. Compilation
+and sample records may straddle summary boundaries. Cached pipelines need not
+produce shader samples. A new game starts a new counter interval after boot.
+
+`draws` counts attempted draws; `flat` is the guest flat-viewport flag, not proof
+that a draw is UI. `culled`, `pending`, `feedback`, `passes`, `copies`, `uploads`
+and `swapchains` count skipped clipped draws, missing pipelines, framebuffer
+feedback draws, render-pass starts, casted-surface copies, texture upload calls
+and swapchain creation attempts respectively. They are not bytes or GPU cost.
+Pipeline logs include queued requests, completed compile calls, explicit pipeline
+creation failures and total compile wall microseconds. Existing logs identify
+the build, game, GPU and graphics settings.
+
+For a 2D HUD slowdown, capture at least 10 seconds of the same scene with UI
+hidden and shown, first with Summary enabled. Export `tsubomi.log` and note the
+time of the UI transition. Increased feedback/passes/copies points toward the
+framebuffer path; queued/compile time/pending points toward compilation; uploads
+points toward texture churn. These are leads, not proof of a CPU/GPU bottleneck.
+Use the native Metal HUD for GPU timing where available. Compare baseline FPS
+with diagnostics and live log/PiP disabled.
+
+## Conservative draw culling
+
+The Graphics page has an opt-in, global Conservative draw culling switch
+(restart required). It skips zero-index/zero-instance draws and fully empty
+scissor draws with a vertex shader eligible for skipping. Vertex eligibility is
+cached once at program creation: buffer-store flags, either USSE load/store
+opcode family in primary or secondary code, and invalid code ranges disable
+skipping. Rejecting read-only loads too is intentionally conservative.
+Visibility queries always keep their normal path. Render-pass clears and
+first-draw depth/stencil bookkeeping happen before the skip decision.
+
+This is not world-space object, distance or occlusion culling: an emulator has no
+reliable scene graph/object bounds to infer which objects a game can omit. Guest
+face-culling state remains authoritative, and visible 2D HUD draws are retained.
+An existing scissor bug is also fixed: negative origins now intersect with the
+render target rather than expanding the unsigned extent. Tests cover negative,
+outside, fractional-resolution and overflow-edge rectangles, buffer effects,
+visibility queries, zero draws and preservation of clears. Real Metal graphics
+correctness and a reduction in the reported UI slowdown still need device tests.

@@ -15,6 +15,7 @@
 // with this program; if not, write to the Free Software Foundation, Inc.,
 // 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
+#include <renderer/draw_safety.h>
 #include <renderer/vulkan/functions.h>
 
 #include <renderer/vulkan/gxm_to_vulkan.h>
@@ -59,16 +60,10 @@ void sync_clipping(VKContext &context) {
         break;
     }
 
-    // Vulkan does not allow the offset to be negative
-    if (context.scissor.offset.x < 0) {
-        context.scissor.extent.width = std::max(context.scissor.extent.width - context.scissor.offset.x, 0U);
-        context.scissor.offset.x = 0;
-    }
-
-    if (context.scissor.offset.y < 0) {
-        context.scissor.extent.height = std::max(context.scissor.extent.height - context.scissor.offset.y, 0U);
-        context.scissor.offset.y = 0;
-    }
+    const auto clipped = renderer::intersect_clip(context.scissor.offset.x, context.scissor.offset.y,
+        context.scissor.extent.width, context.scissor.extent.height,
+        context.render_target->width, context.render_target->height);
+    context.scissor = vk::Rect2D{ { clipped.x, clipped.y }, { clipped.width, clipped.height } };
 
     if (!context.is_recording)
         return;

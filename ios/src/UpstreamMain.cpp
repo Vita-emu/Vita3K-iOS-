@@ -53,6 +53,7 @@
 #include <renderer/state.h>
 #include <touch/functions.h>
 #include <touch/state.h>
+#include <util/render_diagnostics.h>
 #include <util/fs.h>
 #include <util/ios_runtime_tuning.h>
 #include <util/log.h>
@@ -3194,6 +3195,9 @@ int main(int argc, char *argv[]) {
     });
 
     Uint64 perf_last_ms = SDL_GetTicks();
+    render_diagnostics::Reporter graphics_reporter(perf_last_ms);
+    LOG_INFO("GFX diagnostics: mode={} (0 off, 1 summary, 2 sampled shaders), culling={} metal_hud_requested={} title={}",
+        render_diagnostics::mode, ios_runtime::tuning.conservative_culling, ios_runtime::tuning.metal_hud_requested, emuenv->io.app_path);
     std::size_t perf_last_frame_count = emuenv->frame_count.load(std::memory_order_relaxed);
     Uint64 playtime_checkpoint_ms = perf_last_ms;
 
@@ -3297,6 +3301,18 @@ int main(int argc, char *argv[]) {
                     perf_last_ms = now_ms;
                     const float frametime_ms = fps > 0.01f ? 1000.0f / fps : 0.0f;
                     vita3k_ios_update_perf_overlay(fps, frametime_ms);
+                    render_diagnostics::Snapshot graphics;
+                    if (graphics_reporter.poll(now_ms, graphics)) {
+                        const auto &v = graphics.values;
+                        LOG_INFO("GFX interval={}ms last_fps={:.1f} draws={} flat={} culled={} pending={} feedback={} passes={} copies={} uploads={} swapchains={}",
+                            graphics.interval_ms, fps, v[render_diagnostics::Draws], v[render_diagnostics::FlatDraws],
+                            v[render_diagnostics::Culled], v[render_diagnostics::PendingDraws],
+                            v[render_diagnostics::FeedbackDraws], v[render_diagnostics::Passes],
+                            v[render_diagnostics::SurfaceCopies], v[render_diagnostics::TextureUploads], v[render_diagnostics::Swapchains]);
+                        LOG_INFO("GFX pipelines: queued={} compile_calls={} failed={} compile_wall_us={} (sum across workers; not GPU time)",
+                            v[render_diagnostics::PipelineQueued], v[render_diagnostics::PipelineCompiles],
+                            v[render_diagnostics::PipelineFailures], v[render_diagnostics::CompileMicroseconds]);
+                    }
                 }
                 // Persist progress periodically, not only on a clean in-app quit.
                 // iOS users commonly terminate a stalled title from the app

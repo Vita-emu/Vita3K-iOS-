@@ -192,6 +192,7 @@ struct FragmentProgram : ShaderProgram {
 };
 
 struct VertexProgram : ShaderProgram {
+    bool can_skip_when_clipped = false;
     shader::usse::AttributeInformationMap attribute_infos;
 };
 

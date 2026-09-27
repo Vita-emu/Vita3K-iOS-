@@ -27,6 +27,7 @@
 #include <util/ios_runtime_tuning.h>
 #include <util/log.h>
 #include <util/overloaded.h>
+#include <util/render_diagnostics.h>
 
 namespace renderer::vulkan {
 
@@ -323,6 +324,7 @@ static vk::DescriptorSet retrieve_color_descriptor(VKState &state, FrameDescript
 }
 
 void VKContext::start_render_pass(bool create_descriptor_set) {
+    render_diagnostics::add(render_diagnostics::Passes);
     if (in_renderpass) {
         LOG_ERROR("Starting render pass while already in render pass");
         return;

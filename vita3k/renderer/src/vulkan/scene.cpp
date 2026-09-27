@@ -23,7 +23,10 @@
 #include <config/state.h>
 #include <spdlog/fmt/bin_to_hex.h>
 
+#include <renderer/draw_safety.h>
+#include <util/ios_runtime_tuning.h>
 #include <util/log.h>
+#include <util/render_diagnostics.h>
 
 namespace renderer::vulkan {
 
@@ -326,6 +329,9 @@ static void bind_vertex_streams(VKContext &context, MemState &mem, uint32_t inst
 
 void draw(VKContext &context, SceGxmPrimitiveType type, SceGxmIndexFormat format,
     Ptr<void> indices, size_t count, uint32_t instance_count, MemState &mem, const Config &config) {
+    render_diagnostics::add(render_diagnostics::Draws);
+    if (context.record.viewport_flat)
+        render_diagnostics::add(render_diagnostics::FlatDraws);
     void *indices_ptr = indices.get(mem);
 
     context.check_for_macroblock_change(true);
@@ -341,8 +347,18 @@ void draw(VKContext &context, SceGxmPrimitiveType type, SceGxmIndexFormat format
         context.is_first_scene_draw = false;
     }
 
+    // Preserve render-pass clears and first-draw bookkeeping above. Visibility
+    // queries and vertex programs with possible memory effects must still run.
+    const bool empty_clip = context.scissor.extent.width == 0 || context.scissor.extent.height == 0;
+    if (ios_runtime::tuning.conservative_culling && renderer::skip_clipped_draw(true, count == 0 || instance_count == 0, empty_clip, context.record.vertex_program.get(mem)->renderer_data->can_skip_when_clipped, context.current_visibility_buffer != nullptr || context.is_in_query)) {
+        render_diagnostics::add(render_diagnostics::Culled);
+        return;
+    }
+
     const SceGxmFragmentProgram &gxm_fragment_program = *context.record.fragment_program.get(mem);
     const SceGxmProgram &fragment_program_gxp = *gxm_fragment_program.program.get(mem);
+    if (fragment_program_gxp.is_frag_color_used())
+        render_diagnostics::add(render_diagnostics::FeedbackDraws);
     if (context.state.features.direct_fragcolor && fragment_program_gxp.is_frag_color_used()) {
         // the fragment shader is using programmable blending with a subpass input
         vk::ImageMemoryBarrier barrier{
@@ -370,6 +386,7 @@ void draw(VKContext &context, SceGxmPrimitiveType type, SceGxmIndexFormat format
             context.curr_renderpass_info.renderPass = context.current_render_pass;
         }
 
+        render_diagnostics::add(render_diagnostics::Passes);
         context.render_cmd.beginRenderPass(context.curr_renderpass_info, vk::SubpassContents::eInline);
         context.last_draw_was_framebuffer_fetch = fragment_program_gxp.is_frag_color_used();
     }
@@ -407,8 +424,10 @@ void draw(VKContext &context, SceGxmPrimitiveType type, SceGxmIndexFormat format
     }
 
     // can happen with asynchronous pipeline compilation
-    if (context.current_pipeline == nullptr)
+    if (context.current_pipeline == nullptr) {
+        render_diagnostics::add(render_diagnostics::PendingDraws);
         return;
+    }
 
     if (config.log_active_shaders) {
         const std::string hash_text_f = hex_string(context.record.fragment_program.get(mem)->renderer_data->hash);

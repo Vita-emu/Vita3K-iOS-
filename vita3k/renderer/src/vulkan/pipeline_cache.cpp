@@ -30,6 +30,7 @@
 #include <util/fs.h>
 #include <util/ios_runtime_tuning.h>
 #include <util/log.h>
+#include <util/render_diagnostics.h>
 
 #include <SDL3/SDL_cpuinfo.h>
 
@@ -860,6 +861,7 @@ static vk::StencilOpState convert_op_state(const GxmStencilStateOp &state) {
 }
 
 vk::Pipeline PipelineCache::compile_pipeline(SceGxmPrimitiveType type, vk::RenderPass render_pass, const SceGxmVertexProgram &vertex_program_gxm, const SceGxmFragmentProgram &fragment_program_gxm, const GxmRecordState &record, const shader::Hints &hints, MemState &mem) {
+    render_diagnostics::CompileTimer compile_timer;
     const VertexProgram &vertex_program = *vertex_program_gxm.renderer_data;
     const SceGxmProgram *gxm_fragment_shader = fragment_program_gxm.program.get(mem);
     const VKFragmentProgram &fragment_program = *reinterpret_cast<VKFragmentProgram *>(
@@ -964,7 +966,13 @@ vk::Pipeline PipelineCache::compile_pipeline(SceGxmPrimitiveType type, vk::Rende
     };
 
     const auto result = state.device.createGraphicsPipeline(pipeline_cache, pipeline_info);
+    if (render_diagnostics::take_shader_sample()) {
+        LOG_INFO("GFX shader sample: vertex={} fragment={} result={} feedback={} topology={}",
+            hex_string(vertex_program.hash), hex_string(fragment_program.hash), vk::to_string(result.result),
+            gxm_fragment_shader->is_frag_color_used(), static_cast<int>(type));
+    }
     if (result.result != vk::Result::eSuccess) {
+        render_diagnostics::add(render_diagnostics::PipelineFailures);
         LOG_CRITICAL("Failed to create pipeline.");
         return nullptr;
     }
@@ -1022,6 +1030,7 @@ vk::Pipeline PipelineCache::retrieve_pipeline(VKContext &context, SceGxmPrimitiv
     const bool compile_pipeline_async = !already_in_cache && consider_for_async && use_async_compilation;
 
     if (compile_pipeline_async) {
+        render_diagnostics::add(render_diagnostics::PipelineQueued);
         // create the pipeline compile request
         CompileRequest *request = new CompileRequest;
         *request = {

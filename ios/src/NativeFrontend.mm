@@ -4,6 +4,7 @@
 #include <vita3k_ios/NativeFrontend.h>
 #include <vita3k_ios/VirtualController.h>
 #include <util/ios_runtime_tuning.h>
+#include <util/render_diagnostics.h>
 #include <util/log.h>
 
 // Apple's MacTypes.h declares `typedef char *Ptr;`, which collides with the
@@ -1972,6 +1973,10 @@ void vita3k_ios_load_runtime_preferences() {
         ios_runtime::tuning.jit_cache_mib = static_cast<int>([defaults integerForKey:@"tsubomi.jitCacheMiB"]);
         ios_runtime::tuning.cpu_execution_threads = static_cast<int>([defaults integerForKey:@"tsubomi.cpuExecutionThreads"]);
         ios_runtime::tuning.shader_workers = static_cast<int>([defaults integerForKey:@"tsubomi.shaderWorkers"]);
+        ios_runtime::tuning.metal_hud_requested = [defaults boolForKey:@"MetalHUDForceEnabled"];
+        const NSInteger diagnostics = [defaults integerForKey:@"tsubomi.renderDiagnostics"];
+        render_diagnostics::mode = diagnostics == 1 || diagnostics == 2 ? static_cast<int>(diagnostics) : 0;
+        ios_runtime::tuning.conservative_culling = [defaults boolForKey:@"tsubomi.conservativeCulling"];
         ios_runtime::tuning.precompile_shaders = [defaults boolForKey:@"tsubomi.precompileShaders"];
         ios_runtime::tuning.texture_entries = static_cast<int>([defaults integerForKey:@"tsubomi.textureCacheEntries"]);
         ios_runtime::tuning.trim_staging_buffers = [defaults objectForKey:@"tsubomi.trimStagingBuffers"] == nil

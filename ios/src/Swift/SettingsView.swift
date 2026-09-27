@@ -33,6 +33,9 @@ struct SettingsView: View {
     @AppStorage("tsubomi.shaderWorkers") private var shaderWorkers = 0
     @AppStorage("tsubomi.textureCacheEntries") private var textureCacheEntries = 0
     @AppStorage("tsubomi.trimStagingBuffers") private var trimStagingBuffers = true
+    @AppStorage("MetalHUDForceEnabled") private var metalHUDEnabled = false
+    @AppStorage("tsubomi.renderDiagnostics") private var renderDiagnostics = 0
+    @AppStorage("tsubomi.conservativeCulling") private var conservativeCulling = false
     @AppStorage("tsubomi.compactPerformanceHUD") private var compactPerformanceHUD = false
     /// Invoked when the user is done; the host controller dismisses.
     private let onFinish: () -> Void
@@ -329,6 +332,9 @@ struct SettingsView: View {
             }
             .accessibilityValue(model.resolutionLabel)
 
+            if !model.isPerGame {
+                Toggle("Conservative draw culling", isOn: $conservativeCulling)
+            }
             Toggle("High accuracy", isOn: $model.highAccuracy)
             Toggle("Surface sync", isOn: $model.surfaceSync)
             Toggle("Double-buffered guest memory", isOn: $model.doubleBuffer)
@@ -343,6 +349,7 @@ struct SettingsView: View {
         } footer: {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Saved automatically. Close and reopen Tsubomi to apply resolution, High accuracy and double-buffered guest memory. Per-game overrides apply on the next launch.")
+                Text("Conservative draw culling skips empty draws or fully clipped draws only when the vertex program has no detected buffer access and no visibility query is active. Render-pass clears are preserved. It does not guess which game objects are hidden, remove visible HUD elements or apply distance culling. Restart the app to apply; compare the same scene with it off and on.")
                 Text("High accuracy changes framebuffer feedback and surface sampling. It can improve some games and reduce performance. If it causes a black screen, turn it off for that game and report the title and log.")
                 Text("Surface sync copies rendered surfaces back to guest RAM for games that read them on the CPU. It can improve effects and lighting but adds GPU readback work.")
                 Text("Double-buffered guest memory copies CPU buffers for GPU use; it is not display double buffering. Leave it off if models are distorted.")
@@ -380,6 +387,12 @@ struct SettingsView: View {
 
     private var performanceOverlaySection: some View {
         Section {
+            Toggle("Apple Metal Performance HUD", isOn: $metalHUDEnabled)
+            Picker("Renderer diagnostics", selection: $renderDiagnostics) {
+                Text("Off").tag(0)
+                Text("Summary every 5 seconds").tag(1)
+                Text("Summary + shader compilation samples").tag(2)
+            }
             Toggle("Compact readout", isOn: $compactPerformanceHUD)
             DefaultsToggle("Show FPS", key: .perfFPS, onEnable: enablePerfOverlay)
             DefaultsToggle("Show frametime", key: .perfFrametime, onEnable: enablePerfOverlay)
@@ -390,7 +403,13 @@ struct SettingsView: View {
         } header: {
             Text("Performance overlay")
         } footer: {
-            Text("The overlay appears in-game once any metric is enabled. FPS counts guest frame submissions; frametime is calculated from the one-second FPS average, not measured GPU execution time. The live log keeps the last ~250 lines for bug reports.")
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Metal HUD uses Apple's MetalHUDForceEnabled preference. Close and reopen Tsubomi to request it. Availability depends on iOS and app provisioning; this switch cannot guarantee that iOS will display it. It is separate from Tsubomi's overlay.")
+                Text("Renderer diagnostics also require an app restart. Summaries count draw calls, flat-viewport draws, clipping, framebuffer feedback, render passes, surface copies, uploads, swapchain rebuilds and pipeline compilation. Flat draws can include 2D UI but are not an exact UI-object count.")
+                Text("Shader compilation samples add at most four newly compiled shader-pair records per reporting interval; cached pipelines may produce no samples. No per-draw logging, uniform dumps, GPU waits or extra polling thread are added. Diagnostics and Metal HUD still have some overhead; keep them off for baseline FPS measurements.")
+                Text("To report a 2D UI slowdown: enable Summary, reopen the app, play the same scene with the UI hidden and visible for at least 10 seconds each, then export tsubomi.log. Use sampled shaders for a short reproduction if needed.")
+                Text("The Tsubomi overlay appears in-game once any metric is enabled. FPS counts guest frame submissions; frametime is calculated from the one-second FPS average, not measured GPU execution time. The live log keeps the last ~250 lines for bug reports.")
+            }
         }
     }
 

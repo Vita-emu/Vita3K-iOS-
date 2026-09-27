@@ -17,6 +17,8 @@ struct Tuning {
     int texture_entries = 0;
     bool trim_staging_buffers = true;
     bool precompile_shaders = false;
+    bool conservative_culling = false;
+    bool metal_hud_requested = false;
 };
 inline Tuning tuning;
 
