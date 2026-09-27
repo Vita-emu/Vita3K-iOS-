@@ -128,7 +128,18 @@ void sync_texture(VKContext &context, MemState &mem, std::size_t index, SceGxmTe
         // get the sampler now
         context.state.texture_cache.cache_and_bind_sampler(texture, is_depth_surface);
     } else {
-        context.state.texture_cache.cache_and_bind_texture(texture, mem);
+        if (!context.state.texture_cache.cache_and_bind_texture(texture, mem)) {
+            // A queued draw may outlive its movie buffer. Clear the descriptor
+            // so scene.cpp supplies the default image instead of stale data.
+            if (is_vertex) {
+                context.vertex_textures[index - SCE_GXM_MAX_TEXTURE_UNITS] = vk::DescriptorImageInfo{};
+                context.last_vert_texture_count = ~0;
+            } else {
+                context.fragment_textures[index] = vk::DescriptorImageInfo{};
+                context.last_frag_texture_count = ~0;
+            }
+            return;
+        }
         auto &image = context.state.texture_cache.current_texture->texture;
         lookup_result = TextureLookupResult{
             image.view,

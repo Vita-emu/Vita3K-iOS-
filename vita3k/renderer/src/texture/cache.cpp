@@ -31,6 +31,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <mutex>
 #include <numeric>
 #if defined(__x86_64__) && !defined(__APPLE__)
 #include <xxh_x86dispatch.h>
@@ -41,6 +42,30 @@
 
 namespace renderer {
 namespace texture {
+
+#ifdef VITA3K_PLATFORM_IOS
+// Caller holds generation_mutex through the last guest-memory read. A range
+// check alone races free(), which revokes host-page access before returning.
+static bool texture_range_allocated(const MemState &mem, uint64_t address, uint64_t size) {
+    const uint64_t limit = uint64_t{ mem.allocator.max_offset } * STANDARD_PAGE_SIZE;
+    if (address == 0 || size == 0 || address >= limit || size > limit - address)
+        return false;
+    const auto first = static_cast<uint32_t>(address / STANDARD_PAGE_SIZE);
+    const auto end = static_cast<uint32_t>((address + size + STANDARD_PAGE_SIZE - 1) / STANDARD_PAGE_SIZE);
+    return mem.allocator.free_slot_count(first, end) == 0;
+}
+
+static bool texture_source_allocated(const SceGxmTexture &texture, const MemState &mem) {
+    if (!texture_range_allocated(mem, uint64_t{ texture.data_addr } << 2, gxm::texture_size_first_mip(texture)))
+        return false;
+    const auto format = gxm::get_base_format(gxm::get_format(texture));
+    if (format == SCE_GXM_TEXTURE_BASE_FORMAT_P4 || format == SCE_GXM_TEXTURE_BASE_FORMAT_P8) {
+        const uint64_t palette_size = (format == SCE_GXM_TEXTURE_BASE_FORMAT_P4 ? 16 : 256) * sizeof(uint32_t);
+        return texture_range_allocated(mem, uint64_t{ texture.palette_addr } << 6, palette_size);
+    }
+    return true;
+}
+#endif
 
 static uint64_t hash_data(const void *data, size_t size) {
     return XXH3_64bits(data, size);
@@ -635,8 +660,18 @@ static constexpr TextureGxmDataRepr strided_texture_mask = {
     0xF3FFFFFF
 };
 
-void TextureCache::cache_and_bind_texture(const SceGxmTexture &gxm_texture, MemState &mem) {
+bool TextureCache::cache_and_bind_texture(const SceGxmTexture &gxm_texture, MemState &mem) {
     R_PROFILE(__func__);
+
+#ifdef VITA3K_PLATFORM_IOS
+    // Keep pages alive until hashing and synchronous staging uploads finish.
+    // This does not wait for the GPU: upload_texture_impl copies into staging.
+    const std::lock_guard<std::mutex> guest_memory_lock(mem.generation_mutex);
+    if (!texture_source_allocated(gxm_texture, mem)) {
+        LOG_WARN_ONCE("Skipping texture bind from unallocated guest memory: address=0x{:X}", gxm_texture.data_addr << 2);
+        return false;
+    }
+#endif
 
     size_t index = 0;
     bool configure = false;
@@ -811,6 +846,7 @@ void TextureCache::cache_and_bind_texture(const SceGxmTexture &gxm_texture, MemS
     // retrieve the appropriate sampler if needed
     if (use_sampler_cache)
         cache_and_bind_sampler(gxm_texture);
+    return true;
 }
 
 int TextureCache::cache_and_bind_sampler(const SceGxmTexture &gxm_texture, bool is_depth) {
