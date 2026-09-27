@@ -25,6 +25,7 @@
 #include <util/log.h>
 
 #include <algorithm>
+#include <mutex>
 
 // Defines stop/pause behaviour. If true, GetVideo/AudioData will return false when stopped.
 constexpr bool REJECT_DATA_ON_PAUSE = true;
@@ -81,6 +82,9 @@ struct SceAvPlayerEventManager {
 };
 
 struct PlayerInfoState {
+    // Serialize decoder access with Stop/Close; the registry lock only protects handles.
+    std::mutex mutex;
+    bool closed = false;
     PlayerState player;
 
     // Framebuffer count is defined in info. I'm being safe now and forcing it to 4 (even though its usually 2).
@@ -202,6 +206,11 @@ static inline uint64_t current_time() {
         .count();
 }
 
+static PlayerPtr find_player(EmuEnvState &emuenv, SceUID handle) {
+    const auto state = emuenv.kernel.obj_store.get<AvPlayerState>();
+    return state ? lock_and_find(handle, state->players, state->mutex) : PlayerPtr{};
+}
+
 static Ptr<uint8_t> get_buffer(const PlayerPtr &player, MediaType media_type,
     MemState &mem, uint32_t size, bool new_frame = true) {
     uint32_t &buffer_size = media_type == MediaType::VIDEO ? player->video_buffer_size : player->audio_buffer_size;
@@ -209,15 +218,23 @@ static Ptr<uint8_t> get_buffer(const PlayerPtr &player, MediaType media_type,
     auto &buffers = media_type == MediaType::VIDEO ? player->video_buffer : player->audio_buffer;
 
     if (buffer_size < size) {
-        buffer_size = size;
+        std::array<Ptr<uint8_t>, PlayerInfoState::RING_BUFFER_COUNT> replacement{};
         for (uint32_t a = 0; a < PlayerInfoState::RING_BUFFER_COUNT; a++) {
-            if (buffers[a])
-                free(mem, buffers[a]);
-            std::string alloc_name = fmt::format("AvPlayer {} Media Ring {}",
+            const std::string alloc_name = fmt::format("AvPlayer {} Media Ring {}",
                 media_type == MediaType::VIDEO ? "Video" : "Audio", a);
-
-            buffers[a] = alloc(mem, size, alloc_name.c_str());
+            replacement[a] = alloc(mem, size, alloc_name.c_str());
+            if (!replacement[a]) {
+                for (auto buffer : replacement)
+                    if (buffer)
+                        free(mem, buffer);
+                return {};
+            }
         }
+        for (auto buffer : buffers)
+            if (buffer)
+                free(mem, buffer);
+        buffers = replacement;
+        buffer_size = size;
     }
 
     if (new_frame)
@@ -233,8 +250,7 @@ static void run_event_callback(EmuEnvState &emuenv, const ThreadStatePtr &thread
 }
 
 EXPORT(int32_t, sceAvPlayerAddSource, SceUID player_handle, Ptr<const char> path) {
-    const auto state = emuenv.kernel.obj_store.get<AvPlayerState>();
-    const PlayerPtr &player_info = lock_and_find(player_handle, state->players, state->mutex);
+    const auto player_info = find_player(emuenv, player_handle);
 
     if (!player_info) {
         return RET_ERROR(SCE_AVPLAYER_ERROR_INVALID_ARGUMENT);
@@ -275,7 +291,12 @@ EXPORT(int32_t, sceAvPlayerAddSource, SceUID player_handle, Ptr<const char> path
         file_path = temp_file_path;
     }
 
-    player_info->player.queue(file_path.string());
+    {
+        std::lock_guard<std::mutex> lock(player_info->mutex);
+        if (player_info->closed)
+            return RET_ERROR(SCE_AVPLAYER_ERROR_INVALID_ARGUMENT);
+        player_info->player.queue(file_path.string());
+    }
     run_event_callback(emuenv, thread, player_info, SCE_AVPLAYER_STATE_BUFFERING, 0, Ptr<void>(0)); // may be important for sound
     run_event_callback(emuenv, thread, player_info, SCE_AVPLAYER_STATE_READY, 0, Ptr<void>(0));
     return 0;
@@ -283,17 +304,45 @@ EXPORT(int32_t, sceAvPlayerAddSource, SceUID player_handle, Ptr<const char> path
 
 EXPORT(int, sceAvPlayerClose, SceUID player_handle) {
     const auto state = emuenv.kernel.obj_store.get<AvPlayerState>();
-    const PlayerPtr &player_info = lock_and_find(player_handle, state->players, state->mutex);
+    if (!state)
+        return RET_ERROR(SCE_AVPLAYER_ERROR_INVALID_ARGUMENT);
+    PlayerPtr player_info;
+    {
+        std::lock_guard<std::mutex> lock(state->mutex);
+        const auto it = state->players.find(player_handle);
+        if (it == state->players.end())
+            return RET_ERROR(SCE_AVPLAYER_ERROR_INVALID_ARGUMENT);
+        player_info = it->second;
+        // Detach before invoking guest code: a STOP callback can close again.
+        state->players.erase(it);
+    }
+    {
+        std::lock_guard<std::mutex> lock(player_info->mutex);
+        player_info->closed = true;
+        player_info->player.free_video();
+        for (auto &buffer : player_info->video_buffer) {
+            if (buffer)
+                free(emuenv.mem, buffer);
+            buffer = {};
+        }
+        for (auto &buffer : player_info->audio_buffer) {
+            if (buffer)
+                free(emuenv.mem, buffer);
+            buffer = {};
+        }
+    }
     const auto thread = emuenv.kernel.get_thread(thread_id);
     run_event_callback(emuenv, thread, player_info, SCE_AVPLAYER_STATE_STOP, 0, Ptr<void>(0));
-    std::lock_guard<std::mutex> lock(state->mutex);
-    state->players.erase(player_handle);
     return 0;
 }
 
 EXPORT(uint64_t, sceAvPlayerCurrentTime, SceUID player_handle) {
-    const auto state = emuenv.kernel.obj_store.get<AvPlayerState>();
-    const PlayerPtr &player_info = lock_and_find(player_handle, state->players, state->mutex);
+    const auto player_info = find_player(emuenv, player_handle);
+    if (!player_info)
+        return 0;
+    std::unique_lock<std::mutex> lock(player_info->mutex);
+    if (player_info->closed)
+        return 0;
 
     return player_info->player.last_timestamp;
 }
@@ -318,11 +367,14 @@ EXPORT(int32_t, sceAvPlayerEnableStream, SceUID player_handle, uint32_t stream_n
 }
 
 EXPORT(bool, sceAvPlayerGetAudioData, SceUID player_handle, SceAvPlayerFrameInfo *frame_info) {
-    const auto state = emuenv.kernel.obj_store.get<AvPlayerState>();
-    const PlayerPtr &player_info = lock_and_find(player_handle, state->players, state->mutex);
-    if (!player_info) {
+    const auto player_info = find_player(emuenv, player_handle);
+    if (!player_info)
         return false;
-    }
+    std::unique_lock<std::mutex> lock(player_info->mutex);
+    if (player_info->closed)
+        return false;
+    if (!frame_info)
+        return false;
     Ptr<uint8_t> buffer;
 
     if (player_info->paused) {
@@ -340,9 +392,13 @@ EXPORT(bool, sceAvPlayerGetAudioData, SceUID player_handle, SceAvPlayerFrameInfo
             return false;
 
         buffer = get_buffer(player_info, MediaType::AUDIO, emuenv.mem, (uint32_t)data.size() * sizeof(int16_t), false);
+        if (!buffer)
+            return false;
         std::memcpy(buffer.get(emuenv.mem), data.data(), data.size() * sizeof(int16_t));
     }
 
+    if (!buffer)
+        return false;
     frame_info->timestamp = player_info->player.last_timestamp;
     frame_info->stream_details.audio.channels = player_info->player.last_channels;
     frame_info->stream_details.audio.sample_rate = player_info->player.last_sample_rate;
@@ -361,8 +417,12 @@ EXPORT(uint32_t, sceAvPlayerGetStreamInfo, SceUID player_handle, SceUInt32 strea
         return SCE_AVPLAYER_ERROR_ILLEGAL_ADDR;
     }
     STUBBED("ALWAYS SUSPECTS 2 STREAMS: VIDEO AND AUDIO");
-    const auto state = emuenv.kernel.obj_store.get<AvPlayerState>();
-    const PlayerPtr &player_info = lock_and_find(player_handle, state->players, state->mutex);
+    const auto player_info = find_player(emuenv, player_handle);
+    if (!player_info)
+        return SCE_AVPLAYER_ERROR_INVALID_ARGUMENT;
+    std::unique_lock<std::mutex> lock(player_info->mutex);
+    if (player_info->closed)
+        return SCE_AVPLAYER_ERROR_INVALID_ARGUMENT;
     if (stream_no == 0) { // suspect always two streams: audio and video //first is video
         DecoderSize size = player_info->player.get_size();
         stream_info->stream_type = MediaType::VIDEO;
@@ -384,17 +444,24 @@ EXPORT(uint32_t, sceAvPlayerGetStreamInfo, SceUID player_handle, SceUInt32 strea
 }
 
 EXPORT(bool, sceAvPlayerGetVideoData, SceUID player_handle, SceAvPlayerFrameInfo *frame_info) {
-    const auto state = emuenv.kernel.obj_store.get<AvPlayerState>();
-    const PlayerPtr &player_info = lock_and_find(player_handle, state->players, state->mutex);
-    if (!player_info) {
+    const auto player_info = find_player(emuenv, player_handle);
+    if (!player_info)
         return false;
-    }
+    std::unique_lock<std::mutex> lock(player_info->mutex);
+    if (player_info->closed)
+        return false;
+    if (!frame_info)
+        return false;
 
     Ptr<uint8_t> buffer;
 
     DecoderSize size = player_info->player.get_size();
 
+    if (player_info->player.video_playing.empty())
+        return false;
     uint64_t framerate = player_info->player.get_framerate_microseconds();
+    if (framerate == 0 || size.width == 0 || size.height == 0)
+        return false;
 
     // needs new frame
     if (player_info->last_frame_time + framerate < current_time()) {
@@ -409,9 +476,14 @@ EXPORT(bool, sceAvPlayerGetVideoData, SceUID player_handle, SceAvPlayerFrameInfo
             else
                 buffer = get_buffer(player_info, MediaType::VIDEO, emuenv.mem, H264DecoderState::buffer_size(size), false);
         } else {
-            buffer = get_buffer(player_info, MediaType::VIDEO, emuenv.mem, H264DecoderState::buffer_size(size), true);
-
             std::vector<uint8_t> data = player_info->player.receive_video();
+            if (data.empty())
+                return false;
+            // A queued clip can change dimensions while decoding the next frame.
+            size = player_info->player.get_size();
+            buffer = get_buffer(player_info, MediaType::VIDEO, emuenv.mem, static_cast<uint32_t>(data.size()), true);
+            if (!buffer)
+                return false;
             std::memcpy(buffer.get(emuenv.mem), data.data(), data.size());
         }
     } else {
@@ -421,6 +493,8 @@ EXPORT(bool, sceAvPlayerGetVideoData, SceUID player_handle, SceAvPlayerFrameInfo
     // uint32_t buf = SCE_AVPLAYER_ERROR_MAYBE_EOF;
     // run_event_callback(emuenv, thread_id, player_info, SCE_AVPLAYER_STATE_ERROR, 0, &buf);
 
+    if (!buffer)
+        return false;
     frame_info->timestamp = player_info->player.last_timestamp;
     frame_info->stream_details.video.width = size.width;
     frame_info->stream_details.video.height = size.height;
@@ -436,16 +510,21 @@ EXPORT(bool, sceAvPlayerGetVideoDataEx, SceUID player_handle, SceAvPlayerFrameIn
 }
 
 EXPORT(SceUID, sceAvPlayerInit, SceAvPlayerInfo *info) {
+    if (!info)
+        return RET_ERROR(SCE_AVPLAYER_ERROR_INVALID_ARGUMENT);
     emuenv.kernel.obj_store.create<AvPlayerState>();
     const auto state = emuenv.kernel.obj_store.get<AvPlayerState>();
     SceUID player_handle = emuenv.kernel.get_next_uid();
     PlayerPtr player = std::make_shared<PlayerInfoState>();
-    state->players[player_handle] = player;
 
     player->last_frame_time = current_time();
     player->memory_allocator = info->memory_allocator;
     player->file_manager = info->file_manager;
     player->event_manager = info->event_manager;
+    {
+        std::lock_guard<std::mutex> lock(state->mutex);
+        state->players[player_handle] = player;
+    }
 
     // Result is defined as a void *, but I just call it SceUID because it is easier to deal with. Same size.
     return player_handle;
@@ -456,8 +535,12 @@ EXPORT(bool, sceAvPlayerIsActive, SceUID player_handle) {
         return false;
     }
 
-    const auto state = emuenv.kernel.obj_store.get<AvPlayerState>();
-    const PlayerPtr &player_info = lock_and_find(player_handle, state->players, state->mutex);
+    const auto player_info = find_player(emuenv, player_handle);
+    if (!player_info)
+        return false;
+    std::unique_lock<std::mutex> lock(player_info->mutex);
+    if (player_info->closed)
+        return false;
 
     return !player_info->player.video_playing.empty();
 }
@@ -467,9 +550,16 @@ EXPORT(int, sceAvPlayerJumpToTime) {
 }
 
 EXPORT(int, sceAvPlayerPause, SceUID player_handle) {
-    const auto state = emuenv.kernel.obj_store.get<AvPlayerState>();
-    const PlayerPtr &player_info = lock_and_find(player_handle, state->players, state->mutex);
+    const auto player_info = find_player(emuenv, player_handle);
+    if (!player_info)
+        return SCE_AVPLAYER_ERROR_INVALID_ARGUMENT;
+    std::unique_lock<std::mutex> lock(player_info->mutex);
+    if (player_info->closed)
+        return SCE_AVPLAYER_ERROR_INVALID_ARGUMENT;
+    if (player_info->paused)
+        return 0;
     player_info->paused = true;
+    lock.unlock();
     const auto thread = emuenv.kernel.get_thread(thread_id);
     run_event_callback(emuenv, thread, player_info, SCE_AVPLAYER_STATE_PAUSE, 0, Ptr<void>(0));
     return 0;
@@ -480,19 +570,29 @@ EXPORT(int, sceAvPlayerPostInit) {
 }
 
 EXPORT(int, sceAvPlayerResume, SceUID player_handle) {
-    const auto state = emuenv.kernel.obj_store.get<AvPlayerState>();
-    const PlayerPtr &player_info = lock_and_find(player_handle, state->players, state->mutex);
-    if (!player_info->paused) {
+    const auto player_info = find_player(emuenv, player_handle);
+    if (!player_info)
+        return SCE_AVPLAYER_ERROR_INVALID_ARGUMENT;
+    std::unique_lock<std::mutex> lock(player_info->mutex);
+    if (player_info->closed)
+        return SCE_AVPLAYER_ERROR_INVALID_ARGUMENT;
+    const bool was_paused = player_info->paused;
+    player_info->paused = false;
+    lock.unlock();
+    if (was_paused) {
         const auto thread = emuenv.kernel.get_thread(thread_id);
         run_event_callback(emuenv, thread, player_info, SCE_AVPLAYER_STATE_PLAY, 0, Ptr<void>(0));
     }
-    player_info->paused = false;
     return 0;
 }
 
 EXPORT(int, sceAvPlayerSetLooping, SceUID player_handle, bool do_loop) {
-    const auto state = emuenv.kernel.obj_store.get<AvPlayerState>();
-    const PlayerPtr &player_info = lock_and_find(player_handle, state->players, state->mutex);
+    const auto player_info = find_player(emuenv, player_handle);
+    if (!player_info)
+        return SCE_AVPLAYER_ERROR_INVALID_ARGUMENT;
+    std::unique_lock<std::mutex> lock(player_info->mutex);
+    if (player_info->closed)
+        return SCE_AVPLAYER_ERROR_INVALID_ARGUMENT;
     player_info->do_loop = do_loop;
 
     return STUBBED("LOOPING NOT IMPLEMENTED");
@@ -503,20 +603,34 @@ EXPORT(int, sceAvPlayerSetTrickSpeed) {
 }
 
 EXPORT(int, sceAvPlayerStart, SceUID player_handle) {
-    const auto state = emuenv.kernel.obj_store.get<AvPlayerState>();
-    const PlayerPtr &player_info = lock_and_find(player_handle, state->players, state->mutex);
+    const auto player_info = find_player(emuenv, player_handle);
+    if (!player_info)
+        return SCE_AVPLAYER_ERROR_INVALID_ARGUMENT;
+    std::unique_lock<std::mutex> lock(player_info->mutex);
+    if (player_info->closed)
+        return SCE_AVPLAYER_ERROR_INVALID_ARGUMENT;
     if (!player_info->player.videos_queue.empty()) {
         player_info->player.pop_video();
     }
+    lock.unlock();
     const auto thread = emuenv.kernel.get_thread(thread_id);
     run_event_callback(emuenv, thread, player_info, SCE_AVPLAYER_STATE_PLAY, 0, Ptr<void>(0));
     return 0;
 }
 
 EXPORT(int, sceAvPlayerStop, SceUID player_handle) {
-    const auto state = emuenv.kernel.obj_store.get<AvPlayerState>();
-    const PlayerPtr &player_info = lock_and_find(player_handle, state->players, state->mutex);
+    const auto player_info = find_player(emuenv, player_handle);
+    if (!player_info)
+        return SCE_AVPLAYER_ERROR_INVALID_ARGUMENT;
+    std::unique_lock<std::mutex> lock(player_info->mutex);
+    if (player_info->closed)
+        return SCE_AVPLAYER_ERROR_INVALID_ARGUMENT;
+    const bool was_active = !player_info->player.video_playing.empty();
     player_info->player.free_video();
+    player_info->paused = false;
+    lock.unlock();
+    if (!was_active)
+        return 0;
     const auto thread = emuenv.kernel.get_thread(thread_id);
     run_event_callback(emuenv, thread, player_info, SCE_AVPLAYER_STATE_STOP, 0, Ptr<void>(0));
     return 0;

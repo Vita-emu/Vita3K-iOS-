@@ -28,7 +28,12 @@ extern "C" {
 #include <cassert>
 
 uint64_t PlayerState::get_framerate_microseconds() {
-    AVRational rational = format->streams[video_stream_id]->avg_frame_rate;
+    if (!format || !video_context || video_stream_id < 0
+        || static_cast<unsigned>(video_stream_id) >= format->nb_streams)
+        return 0;
+    const AVRational rational = format->streams[video_stream_id]->avg_frame_rate;
+    if (rational.num <= 0 || rational.den <= 0)
+        return 0;
     return 1000000ull * rational.den / rational.num;
 }
 
