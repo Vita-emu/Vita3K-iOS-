@@ -14,6 +14,10 @@
 // no-ops by the time they are reached.
 #define Ptr MacTypesPtr
 #import <UIKit/UIKit.h>
+#import <Metal/Metal.h>
+#include <mach/mach.h>
+#include <os/proc.h>
+#include <sys/utsname.h>
 #undef Ptr
 
 #include <algorithm>
@@ -309,6 +313,58 @@ id bridge_games() {
     return ios_runtime::uses_jit();
 }
 
+
++ (NSDictionary<NSString *, NSString *> *)deviceInformation {
+    NSProcessInfo *process = NSProcessInfo.processInfo;
+    UIDevice *device = UIDevice.currentDevice;
+    struct utsname hardware{};
+    const bool identified = uname(&hardware) == 0;
+    static NSString *gpuName;
+    static dispatch_once_t gpuOnce;
+    dispatch_once(&gpuOnce, ^{
+        id<MTLDevice> gpu = MTLCreateSystemDefaultDevice();
+        gpuName = gpu.name ?: @"Unavailable";
+    });
+    task_vm_info_data_t memory{};
+    mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+    NSString *footprint = @"Unavailable";
+    if (task_info(mach_task_self(), TASK_VM_INFO, reinterpret_cast<task_info_t>(&memory), &count) == KERN_SUCCESS)
+        footprint = [NSString stringWithFormat:@"%.0f MiB", memory.phys_footprint / 1048576.0];
+    NSString *thermal = @"Unknown";
+    switch (process.thermalState) {
+    case NSProcessInfoThermalStateNominal: thermal = @"Nominal"; break;
+    case NSProcessInfoThermalStateFair: thermal = @"Warm"; break;
+    case NSProcessInfoThermalStateSerious: thermal = @"Serious"; break;
+    case NSProcessInfoThermalStateCritical: thermal = @"Critical"; break;
+    }
+    NSDictionary *disk = [NSFileManager.defaultManager attributesOfFileSystemForPath:NSHomeDirectory() error:nil];
+    NSString *freeDisk = disk[NSFileSystemFreeSize]
+        ? [NSByteCountFormatter stringFromByteCount:[disk[NSFileSystemFreeSize] longLongValue] countStyle:NSByteCountFormatterCountStyleFile] : @"Unavailable";
+    NSString *version = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"Unknown";
+    NSString *build = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleVersion"] ?: @"Unknown";
+#if defined(__aarch64__)
+    NSString *architecture = @"ARM64";
+#else
+    NSString *architecture = @"x86_64 (Simulator)";
+#endif
+    return @{
+        @"Model": device.model,
+        @"Hardware identifier": identified ? [NSString stringWithUTF8String:hardware.machine] : @"Unknown",
+        @"System": [NSString stringWithFormat:@"%@ %@", device.systemName, device.systemVersion],
+        @"CPU architecture": architecture,
+        @"Logical CPUs": [NSString stringWithFormat:@"%ld active / %ld total", (long)process.activeProcessorCount, (long)process.processorCount],
+        @"GPU": gpuName,
+        @"Physical RAM": [NSString stringWithFormat:@"%.0f MiB", process.physicalMemory / 1048576.0],
+        @"App memory": footprint,
+        @"Memory headroom": [NSString stringWithFormat:@"%.0f MiB", os_proc_available_memory() / 1048576.0],
+        @"Free storage": freeDisk,
+        @"Thermal state": thermal,
+        @"Low Power Mode": process.lowPowerModeEnabled ? @"On" : @"Off",
+        @"App version": [NSString stringWithFormat:@"%@ (%@)", version, build],
+        @"Renderer": @"Vulkan → MoltenVK → Metal",
+        @"Active CPU backend": ios_runtime::uses_jit() ? @"Dynarmic JIT" : @"IR Interpreter (experimental)"
+    };
+}
 
 + (TsubomiSettings *)currentSettings {
     return [[TsubomiSettings alloc]

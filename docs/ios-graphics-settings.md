@@ -151,3 +151,42 @@ render target rather than expanding the unsigned extent. Tests cover negative,
 outside, fractional-resolution and overflow-edge rectangles, buffer effects,
 visibility queries, zero draws and preservation of clears. Real Metal graphics
 correctness and a reduction in the reported UI slowdown still need device tests.
+
+## Compact interface and periodic stutter follow-up
+
+The supplied Undertale log (d101bc61) shows a one-pixel window/surface mismatch
+(1080×1920 vs 1080×1921) without repeated swapchain creation after boot. The
+20 FPS sample at 15:04:53 has no pipeline compilation, pending draws or casted
+surface copies. It does not identify the cause of the hitch. Memory headroom
+falls during the session; neither the FPS average nor that trend establishes
+CPU, GPU or memory-pressure causality.
+
+The live log now uses a plain translucent 300×116-point panel (clamped to the
+safe area), with no blur/backdrop sampling. Drag the header, collapse to 32
+points, or close it. Normalized positions persist and clamp after rotation.
+Only the header intercepts touches; the text area passes touches to the game.
+It copies eight recent lines instead of the complete 500-line ring, truncates
+long display lines, skips unchanged UITextView text replacement and does no
+text work while collapsed. The exported file retains the full log. Background
+opacity is adjustable in Performance Overlay. Native dragging, touch routing
+and actual frame-time improvement still require device validation.
+
+Settings separates ordinary graphics/audio/controls from Advanced Settings
+(CPU/JIT, memory, shaders, compatibility and diagnostics). Explanations are
+collapsed under Details. The dedicated NoNpDrm folder import menu entry is
+removed. Onboarding uses compact scrollable content and shorter copy.
+
+Device & Runtime reads a snapshot on demand: model and hardware identifier,
+iOS version, CPU architecture and logical counts, Metal GPU name, physical RAM,
+app footprint, process memory headroom, disk space, thermal state, Low Power
+Mode, app version and active backend. JIT availability comes from the existing
+core status publication, not a new allocation/probe every time the page draws.
+The initial untested state no longer defaults to available. Runtime capability
+can change after the last check. No hardware benchmark or periodic sampling
+thread is created for this page.
+
+The HUD preference alone did not display Apple's HUD on the user's build.
+Startup now also sets Apple's documented `MTL_HUD_ENABLED` environment variable
+before renderer initialization, matching the saved preference. This is a
+second documented activation route, not confirmation that the OS accepted it;
+provisioning/version restrictions still apply. Device confirmation is pending.

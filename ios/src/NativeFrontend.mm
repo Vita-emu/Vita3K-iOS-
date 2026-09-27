@@ -5,6 +5,8 @@
 #include <vita3k_ios/VirtualController.h>
 #include <util/ios_runtime_tuning.h>
 #include <util/render_diagnostics.h>
+#include <vita3k_ios/OverlayLayout.h>
+#include <cstdlib>
 #include <util/log.h>
 
 // Apple's MacTypes.h declares `typedef char *Ptr;`, which collides with the
@@ -991,7 +993,7 @@ static void attach_library_view(UIView *host) {
 }
 // Last-known JIT availability, applied whenever the library is (re)shown so the
 // banner is correct even across library rebuilds between game sessions.
-static BOOL g_jit_available = YES;
+static BOOL g_jit_available = NO;
 // A quit game's SDL/Metal drawable can be torn down over several runloop
 // ticks, not just the one after vita3k_ios_show_library reasserts visibility
 // - if settings gets opened (or the library redraws) in that window, the
@@ -1687,83 +1689,150 @@ void vita3k_ios_request_current_trophies() {
 // (PerformanceOverlayView), fed from vita3k_ios_update_perf_overlay via
 // TsubomiPerformanceStateBridge. Only the live-log panel below is still UIKit.
 
-// Optional live log/console overlay (Settings > Performance overlay > Show
-// live log): a bottom-docked scrolling panel of the most recent log lines,
-// for reporting bugs without pulling the device off to read tsubomi.log.
-// Independent of the FPS/frametime/RAM/battery HUD toggles above, so it is
-// updated on every vita3k_ios_update_perf_overlay tick regardless of whether
-// that HUD itself is shown.
-static UIVisualEffectView *g_log_hud = nil;
-static UITextView *g_log_text = nil;
-// Which material the panel was built with, so a change to the setting rebuilds
-// it rather than leaving a glass backdrop up until the next session.
-static BOOL g_log_hud_is_glass = YES;
-// What the last perf tick put on screen. Read and written only from the
-// emulator loop, and only so a tick that has nothing to show can skip the hop
-// to the main thread without stranding views that were up a moment ago.
+// Only the compact header intercepts touches. The transparent text area lets
+// the game controls underneath continue receiving input.
+@interface TsubomiLiveLogView : UIView
+@property(nonatomic, strong) UIView *header;
+@property(nonatomic, strong) UILabel *title;
+@property(nonatomic, strong) UIButton *fold;
+@property(nonatomic, strong) UIButton *closeButton;
+@property(nonatomic, strong) UITextView *textView;
+@property(nonatomic) double positionX;
+@property(nonatomic) double positionY;
+@property(nonatomic) BOOL collapsed;
+- (void)placeInWindow:(UIWindow *)window;
+@end
+
+@implementation TsubomiLiveLogView
+- (instancetype)initWithFrame:(CGRect)frame {
+    if ((self = [super initWithFrame:frame])) {
+        NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+        _positionX = overlay_layout::normalized([defaults objectForKey:@"tsubomi.logX"] ? [defaults doubleForKey:@"tsubomi.logX"] : 1.0);
+        _positionY = overlay_layout::normalized([defaults doubleForKey:@"tsubomi.logY"]);
+        _collapsed = [defaults boolForKey:@"tsubomi.logCollapsed"];
+        self.layer.cornerRadius = 10;
+        self.clipsToBounds = YES;
+        _header = [[UIView alloc] init];
+        [self addSubview:_header];
+        _title = [[UILabel alloc] init];
+        _title.text = @"Live log · drag";
+        _title.font = [UIFont systemFontOfSize:11 weight:UIFontWeightSemibold];
+        _title.textColor = UIColor.whiteColor;
+        [_header addSubview:_title];
+        [_header addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(movePanel:)]];
+        _fold = [UIButton buttonWithType:UIButtonTypeSystem];
+        _fold.tintColor = UIColor.whiteColor;
+        _fold.accessibilityLabel = @"Expand or collapse live log";
+        [_fold addTarget:self action:@selector(toggleCollapsed) forControlEvents:UIControlEventTouchUpInside];
+        [_header addSubview:_fold];
+        _closeButton = [UIButton buttonWithType:UIButtonTypeSystem];
+        [_closeButton setImage:[UIImage systemImageNamed:@"xmark"] forState:UIControlStateNormal];
+        _closeButton.tintColor = UIColor.whiteColor;
+        _closeButton.accessibilityLabel = @"Hide live log";
+        [_closeButton addTarget:self action:@selector(hideLog) forControlEvents:UIControlEventTouchUpInside];
+        [_header addSubview:_closeButton];
+        _textView = [[UITextView alloc] init];
+        _textView.backgroundColor = UIColor.clearColor;
+        _textView.textColor = UIColor.whiteColor;
+        _textView.font = [UIFont monospacedSystemFontOfSize:9 weight:UIFontWeightRegular];
+        _textView.editable = NO;
+        _textView.selectable = NO;
+        _textView.userInteractionEnabled = NO;
+        _textView.showsVerticalScrollIndicator = NO;
+        _textView.textContainerInset = UIEdgeInsetsMake(0, 6, 4, 6);
+        [self addSubview:_textView];
+    }
+    return self;
+}
+- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
+    if (point.y >= 32)
+        return nil;
+    return [super hitTest:point withEvent:event];
+}
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    const CGFloat width = CGRectGetWidth(self.bounds);
+    _header.frame = CGRectMake(0, 0, width, 32);
+    _title.frame = CGRectMake(8, 0, MAX(0, width - 80), 32);
+    _fold.frame = CGRectMake(width - 64, 0, 32, 32);
+    _closeButton.frame = CGRectMake(width - 32, 0, 32, 32);
+    _textView.frame = CGRectMake(0, 32, width, MAX(0, CGRectGetHeight(self.bounds) - 32));
+    _textView.hidden = _collapsed;
+}
+- (void)placeInWindow:(UIWindow *)window {
+    const UIEdgeInsets safe = window.safeAreaInsets;
+    const auto rect = overlay_layout::panel(CGRectGetWidth(window.bounds), CGRectGetHeight(window.bounds),
+        safe.left, safe.top, safe.right, safe.bottom, _positionX, _positionY, _collapsed);
+    const CGRect frame = CGRectMake(rect.x, rect.y, rect.width, rect.height);
+    if (!CGRectEqualToRect(self.frame, frame))
+        self.frame = frame;
+    [_fold setImage:[UIImage systemImageNamed:_collapsed ? @"chevron.down" : @"chevron.up"] forState:UIControlStateNormal];
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    double opacity = [defaults objectForKey:@"tsubomi.logOpacity"] ? [defaults doubleForKey:@"tsubomi.logOpacity"] : 0.18;
+    self.backgroundColor = [UIColor colorWithWhite:0 alpha:std::isfinite(opacity) ? std::clamp(opacity, 0.1, 0.6) : 0.18];
+}
+- (void)movePanel:(UIPanGestureRecognizer *)gesture {
+    UIWindow *window = self.window;
+    if (!window) return;
+    const auto translation = [gesture translationInView:window];
+    const UIEdgeInsets safe = window.safeAreaInsets;
+    const double dx = CGRectGetWidth(window.bounds) - safe.left - safe.right - 16 - CGRectGetWidth(self.bounds);
+    const double dy = CGRectGetHeight(window.bounds) - safe.top - safe.bottom - 16 - CGRectGetHeight(self.bounds);
+    _positionX = overlay_layout::normalized(dx > 0 ? _positionX + translation.x / dx : 0);
+    _positionY = overlay_layout::normalized(dy > 0 ? _positionY + translation.y / dy : 0);
+    [gesture setTranslation:CGPointZero inView:window];
+    [self placeInWindow:window];
+    if (gesture.state == UIGestureRecognizerStateEnded || gesture.state == UIGestureRecognizerStateCancelled) {
+        [NSUserDefaults.standardUserDefaults setDouble:_positionX forKey:@"tsubomi.logX"];
+        [NSUserDefaults.standardUserDefaults setDouble:_positionY forKey:@"tsubomi.logY"];
+    }
+}
+- (void)toggleCollapsed {
+    _collapsed = !_collapsed;
+    [NSUserDefaults.standardUserDefaults setBool:_collapsed forKey:@"tsubomi.logCollapsed"];
+    if (self.window) [self placeInWindow:self.window];
+}
+- (void)hideLog {
+    [NSUserDefaults.standardUserDefaults setBool:NO forKey:@"vita3k.perf.log"];
+    self.hidden = YES;
+}
+@end
+
+static TsubomiLiveLogView *g_log_hud = nil;
 static BOOL g_perf_overlay_shown = NO;
 static BOOL g_perf_log_shown = NO;
 
 static void update_log_overlay(UIWindow *window) {
-    const BOOL show_log = [NSUserDefaults.standardUserDefaults boolForKey:@"vita3k.perf.log"];
-    if (!show_log || !window) {
+    if (![NSUserDefaults.standardUserDefaults boolForKey:@"vita3k.perf.log"] || !window) {
         g_log_hud.hidden = YES;
         return;
     }
-    // The one remaining UIKit surface that sits over a live game, so it follows
-    // the same in-game material preference the SwiftUI overlay does: a glass
-    // backdrop here is re-sampled on every frame the game draws.
-    const BOOL liquid_glass = in_game_liquid_glass_enabled();
-    if (g_log_hud && g_log_hud_is_glass != liquid_glass) {
-        [g_log_hud removeFromSuperview];
-        g_log_hud = nil;
-        g_log_text = nil;
-    }
-    if (!g_log_hud) {
-        // Non-interactive: never intercepts the game's touch controls, which
-        // stay above it in the window's subview order.
-        g_log_hud = [[UIVisualEffectView alloc] initWithEffect:liquid_glass ? glass_effect(NO) : nil];
-        g_log_hud_is_glass = liquid_glass;
-        if (!liquid_glass)
-            g_log_hud.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.55];
-        round_continuous(g_log_hud, 10);
-        g_log_hud.clipsToBounds = YES;
-        g_log_hud.userInteractionEnabled = NO;
-        g_log_text = [[UITextView alloc] init];
-        g_log_text.backgroundColor = UIColor.clearColor;
-        g_log_text.textColor = [UIColor colorWithWhite:0.85 alpha:1.0];
-        g_log_text.font = [UIFont monospacedSystemFontOfSize:9 weight:UIFontWeightRegular];
-        g_log_text.editable = NO;
-        g_log_text.selectable = NO;
-        g_log_text.userInteractionEnabled = NO;
-        g_log_text.showsVerticalScrollIndicator = NO;
-        g_log_text.textContainerInset = UIEdgeInsetsMake(4, 6, 4, 6);
-        [g_log_hud.contentView addSubview:g_log_text];
-    }
-    if (g_log_hud.superview != window) {
+    if (!g_log_hud)
+        g_log_hud = [[TsubomiLiveLogView alloc] initWithFrame:CGRectZero];
+    if (g_log_hud.superview != window)
         [window addSubview:g_log_hud];
-        [window bringSubviewToFront:g_log_hud];
-    }
     g_log_hud.hidden = NO;
-
-    const std::vector<std::string> lines = vita3k_ios_recent_log_lines();
-    const size_t shown = std::min<size_t>(lines.size(), 40);
+    [g_log_hud placeInWindow:window];
+    if (g_log_hud.collapsed)
+        return;
+    // Fetch only what will be displayed, instead of copying the entire ring.
+    const auto lines = vita3k_ios_recent_log_lines(8);
     NSMutableString *joined = [NSMutableString string];
-    for (size_t i = lines.size() - shown; i < lines.size(); ++i) {
-        [joined appendString:[NSString stringWithUTF8String:lines[i].c_str()] ?: @""];
-        [joined appendString:@"\n"];
+    for (const auto &line : lines) {
+        NSString *text = [NSString stringWithUTF8String:line.c_str()] ?: @"";
+        if (text.length > 240) {
+            NSRange range = [text rangeOfComposedCharacterSequencesForRange:NSMakeRange(0, 240)];
+            text = [[text substringWithRange:range] stringByAppendingString:@"…"];
+        }
+        [joined appendFormat:@"%@\n", text];
     }
-    g_log_text.text = joined;
-
-    const UIEdgeInsets safe = window.safeAreaInsets;
-    const CGFloat windowWidth = CGRectGetWidth(window.bounds);
-    const CGFloat windowHeight = CGRectGetHeight(window.bounds);
-    const CGFloat width = windowWidth - safe.left - safe.right - 16;
-    const CGFloat height = MIN(220.0, windowHeight * 0.32);
-    g_log_hud.frame = CGRectMake(safe.left + 8, windowHeight - safe.bottom - height - 8, width, height);
-    g_log_text.frame = g_log_hud.bounds;
-    if (g_log_text.text.length > 0)
-        [g_log_text scrollRangeToVisible:NSMakeRange(g_log_text.text.length - 1, 1)];
+    // UITextView layout/scrolling can be expensive on the emulation main
+    // thread. No text replacement when the ring has not changed.
+    if (![g_log_hud.textView.text isEqualToString:joined]) {
+        g_log_hud.textView.text = joined;
+        if (joined.length)
+            [g_log_hud.textView scrollRangeToVisible:NSMakeRange(joined.length - 1, 1)];
+    }
 }
 
 void vita3k_ios_update_perf_overlay(const float guest_fps, const float frametime_ms) {
@@ -1837,7 +1906,6 @@ void vita3k_ios_hide_perf_overlay() {
         [TsubomiPerformanceStateBridge setVisible:NO];
         [g_log_hud removeFromSuperview];
         g_log_hud = nil;
-        g_log_text = nil;
     });
 }
 
@@ -1974,6 +2042,10 @@ void vita3k_ios_load_runtime_preferences() {
         ios_runtime::tuning.cpu_execution_threads = static_cast<int>([defaults integerForKey:@"tsubomi.cpuExecutionThreads"]);
         ios_runtime::tuning.shader_workers = static_cast<int>([defaults integerForKey:@"tsubomi.shaderWorkers"]);
         ios_runtime::tuning.metal_hud_requested = [defaults boolForKey:@"MetalHUDForceEnabled"];
+        // Apple's documented environment route must be set before renderer
+        // initialization; changing only the preference did not show the HUD on
+        // the reported sideloaded build. The OS may still gate availability.
+        setenv("MTL_HUD_ENABLED", ios_runtime::tuning.metal_hud_requested ? "1" : "0", 1);
         const NSInteger diagnostics = [defaults integerForKey:@"tsubomi.renderDiagnostics"];
         render_diagnostics::mode = diagnostics == 1 || diagnostics == 2 ? static_cast<int>(diagnostics) : 0;
         ios_runtime::tuning.conservative_culling = [defaults boolForKey:@"tsubomi.conservativeCulling"];

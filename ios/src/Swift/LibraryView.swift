@@ -309,24 +309,17 @@ struct LibraryView: View {
                         Bridge.presentGameImportPicker()
                     }
                 } label: {
-                    Label("Import game (.vpk / .zip / .pkg)", systemImage: "arrow.down.doc")
-                }
-                Button {
-                    if Bridge.firmwareReadyOrPresentAlert() {
-                        Bridge.presentGameFolderImportPicker()
-                    }
-                } label: {
-                    Label("Import game folder (NoNpDrm)", systemImage: "folder.badge.plus")
+                    Label("Game archive (.vpk / .zip / .pkg)", systemImage: "arrow.down.doc")
                 }
                 Button {
                     Bridge.presentLicenseImportPicker()
                 } label: {
-                    Label("Import license (work.bin)", systemImage: "key.fill")
+                    Label("License (work.bin)", systemImage: "key.fill")
                 }
                 Button {
                     Bridge.presentFirmwareImportPicker()
                 } label: {
-                    Label("Import firmware (.PUP)", systemImage: "cpu")
+                    Label("Firmware (.PUP)", systemImage: "cpu")
                 }
             } label: {
                 Label("Add", systemImage: "plus")

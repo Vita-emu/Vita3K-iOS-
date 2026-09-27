@@ -15,6 +15,8 @@ import SwiftUI
 @MainActor
 struct SettingsView: View {
     @Environment(\.scenePhase) private var scenePhase
+    @ObservedObject private var library = LibraryState.shared
+    @State private var deviceInformation: [String: String] = [:]
     @StateObject private var model: SettingsModel
     @ObservedObject private var runtimeLatch = RuntimeLatch.shared
     @AppStorage("tsubomi.orientationLockEnabled")
@@ -36,6 +38,7 @@ struct SettingsView: View {
     @AppStorage("MetalHUDForceEnabled") private var metalHUDEnabled = false
     @AppStorage("tsubomi.renderDiagnostics") private var renderDiagnostics = 0
     @AppStorage("tsubomi.conservativeCulling") private var conservativeCulling = false
+    @AppStorage("tsubomi.logOpacity") private var logOpacity = 0.18
     @AppStorage("tsubomi.compactPerformanceHUD") private var compactPerformanceHUD = false
     /// Invoked when the user is done; the host controller dismisses.
     private let onFinish: () -> Void
@@ -53,15 +56,7 @@ struct SettingsView: View {
             Form {
                 Section("Emulation") {
                     NavigationLink {
-                        settingsPage("CPU & Execution") { cpuSection }
-                    } label: { Label("CPU & Execution", systemImage: "cpu") }
-                    if !model.isPerGame {
-                        NavigationLink {
-                            settingsPage("Memory") { memorySection }
-                        } label: { Label("Memory", systemImage: "memorychip") }
-                    }
-                    NavigationLink {
-                        settingsPage("Graphics & Display") { videoSection; graphicsSection; shaderSection }
+                        settingsPage("Graphics & Display") { videoSection; graphicsSection }
                     } label: { Label("Graphics & Display", systemImage: "cube") }
                     NavigationLink {
                         settingsPage("Audio") { audioSection }
@@ -87,9 +82,24 @@ struct SettingsView: View {
                             settingsPage("Firmware") { firmwareSection }
                         } label: { Label("Firmware", systemImage: "internaldrive") }
                     }
-                    if runtimeLatch.revealed { runtimeSection }
+                    Section("Tools") {
+                        NavigationLink {
+                            settingsPage("Device & Runtime") { deviceSection }
+                                .onAppear { deviceInformation = Bridge.deviceInformation }
+                        } label: { Label("Device & Runtime", systemImage: "iphone") }
+                        NavigationLink {
+                            advancedPage
+                        } label: { Label("Advanced Settings", systemImage: "slider.horizontal.3") }
+                    }
                 }
-                if model.isPerGame { perGameResetSection }
+                if model.isPerGame {
+                    Section("Advanced") {
+                        NavigationLink("CPU & JIT") { settingsPage("CPU & JIT") { cpuSection } }
+                        NavigationLink("Shaders") { settingsPage("Shaders") { shaderSection } }
+                        NavigationLink("Compatibility") { settingsPage("Compatibility") { compatibilitySection } }
+                    }
+                    perGameResetSection
+                }
             }
             .onDisappear { model.save() }
             .onChange(of: scenePhase) { phase in
@@ -201,6 +211,55 @@ struct SettingsView: View {
             .onDisappear { model.save() }
     }
 
+    private func settingsHelp<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        DisclosureGroup("Details") {
+            VStack(alignment: .leading, spacing: 8, content: content)
+                .padding(.top, 6)
+        }
+    }
+
+    private var advancedPage: some View {
+        Form {
+            Section("Execution & Memory") {
+                NavigationLink("CPU & JIT") { settingsPage("CPU & JIT") { cpuSection } }
+                NavigationLink("Memory") { settingsPage("Memory") { memorySection } }
+            }
+            Section("Rendering") {
+                NavigationLink("Shader compilation") { settingsPage("Shaders") { shaderSection } }
+                NavigationLink("Compatibility") { settingsPage("Compatibility") { compatibilitySection } }
+                NavigationLink("Diagnostics & Metal HUD") { settingsPage("Diagnostics") { diagnosticsSection } }
+            }
+            if runtimeLatch.revealed { runtimeSection }
+        }
+        .navigationTitle("Advanced Settings")
+        .navigationBarTitleDisplayMode(.inline)
+        .onDisappear { model.save() }
+    }
+
+    private var deviceSection: some View {
+        Group {
+            Section("Runtime") {
+                LabeledContent("JIT status", value: library.jitAvailable ? "Available (last core check)" : "Unavailable / not checked")
+                ForEach(["Active CPU backend", "Renderer", "App version"], id: \.self) { key in
+                    LabeledContent(key, value: deviceInformation[key] ?? "Unknown")
+                }
+            }
+            Section("Hardware & System") {
+                ForEach(["Model", "Hardware identifier", "System", "CPU architecture", "Logical CPUs", "GPU", "Physical RAM"], id: \.self) { key in
+                    LabeledContent(key, value: deviceInformation[key] ?? "Unknown")
+                }
+            }
+            Section {
+                ForEach(["App memory", "Memory headroom", "Free storage", "Thermal state", "Low Power Mode"], id: \.self) { key in
+                    LabeledContent(key, value: deviceInformation[key] ?? "Unknown")
+                }
+                Button("Refresh snapshot") { deviceInformation = Bridge.deviceInformation }
+            } header: { Text("Current Snapshot") } footer: {
+                Text("Values update when this page opens or you refresh. Memory headroom is the OS estimate for this process; it is not total free RAM. JIT availability can change after the core's check.")
+            }
+        }
+    }
+
     private var cpuSection: some View {
         Section {
             if !model.isPerGame {
@@ -210,7 +269,7 @@ struct SettingsView: View {
                 }
                 LabeledContent("Active backend", value: Bridge.cpuRequiresJIT ? "Dynarmic JIT" : "IR Interpreter")
                 if cpuBackend == 0 {
-                    Picker("CPU / JIT execution threads", selection: $cpuExecutionThreads) {
+                    Picker("Concurrent CPU threads", selection: $cpuExecutionThreads) {
                         Text("Automatic (OS scheduling)").tag(0)
                         ForEach(1...8, id: \.self) { value in
                             Text("Up to \(value)").tag(value)
@@ -218,7 +277,7 @@ struct SettingsView: View {
                     }
                     LabeledContent("Host logical CPUs", value: "\(ProcessInfo.processInfo.activeProcessorCount)")
                     LabeledContent("JIT compiler", value: "Runs in guest CPU threads")
-                    Picker("JIT cache per guest thread", selection: $jitCacheMiB) {
+                    Picker("JIT cache / thread", selection: $jitCacheMiB) {
                         Text("Automatic").tag(0)
                         ForEach([4, 8, 12, 16, 24, 32], id: \.self) { value in
                             Text("\(value) MiB").tag(value)
@@ -231,7 +290,7 @@ struct SettingsView: View {
         } header: {
             Text("CPU")
         } footer: {
-            VStack(alignment: .leading, spacing: 8) {
+            settingsHelp {
                 Text("Backend, execution thread limit and JIT cache changes take effect after closing and reopening Tsubomi. Active backend shows the backend this process is using.")
                 Text("Dynarmic JIT requires JIT permission. CPU optimizations apply on the next game launch.")
                 Text("IR Interpreter is experimental and slower. It supports a subset of ARM/Thumb integer instructions; VFP, NEON and exclusive instructions are not supported. Unsupported instructions stop execution and are recorded in the log.")
@@ -245,7 +304,7 @@ struct SettingsView: View {
 
     private var memorySection: some View {
         Section {
-            Picker("Guest RAM allocation limit", selection: $guestMemoryMiB) {
+            Picker("Guest RAM limit", selection: $guestMemoryMiB) {
                 ForEach([512, 768, 1024], id: \.self) { value in
                     Text("\(value) MiB").tag(value)
                 }
@@ -265,7 +324,7 @@ struct SettingsView: View {
         } header: {
             Text("Allocation & Caches")
         } footer: {
-            VStack(alignment: .leading, spacing: 8) {
+            settingsHelp {
                 Text("Saved immediately. Close and reopen Tsubomi to apply these memory settings.")
                 Text("Guest RAM limits memory allocated by the emulated game. The default is 768 MiB; games that need more may fail to allocate memory. JIT code, GPU resources and the interface use additional RAM.")
                 Text("Texture cache limits count textures, not MiB. Smaller caches use fewer entries but may cause more uploads and stutter.")
@@ -280,7 +339,7 @@ struct SettingsView: View {
             Toggle("Shader disk cache", isOn: $model.shaderCache)
             Toggle("Async pipeline compilation", isOn: $model.asyncPipelineCompilation)
             if !model.isPerGame {
-                Picker("GPU shader compiler CPU threads", selection: $shaderWorkers) {
+                Picker("Shader compiler workers", selection: $shaderWorkers) {
                     Text("Automatic").tag(0)
                     ForEach(1...4, id: \.self) { value in Text("\(value)").tag(value) }
                 }
@@ -291,7 +350,7 @@ struct SettingsView: View {
         } header: {
             Text("Shaders")
         } footer: {
-            VStack(alignment: .leading, spacing: 8) {
+            settingsHelp {
                 Text("Shader disk cache reuses compiled shaders between launches. Async compilation can reduce pauses, but objects may be missing until their pipeline is ready. Turn it off when checking missing graphics.")
                 Text("Shader compiler workers run on the CPU and prepare graphics pipelines. They are separate from CPU JIT execution. Metal schedules 3D work on the GPU; this renderer cannot enable a chosen number of physical GPU cores.")
                 Text("Compiler thread count and precompilation require an app restart. More threads can increase CPU and memory use; precompilation needs disk caching and can lengthen startup.")
@@ -332,13 +391,6 @@ struct SettingsView: View {
             }
             .accessibilityValue(model.resolutionLabel)
 
-            if !model.isPerGame {
-                Toggle("Conservative draw culling", isOn: $conservativeCulling)
-            }
-            Toggle("High accuracy", isOn: $model.highAccuracy)
-            Toggle("Surface sync", isOn: $model.surfaceSync)
-            Toggle("Double-buffered guest memory", isOn: $model.doubleBuffer)
-
             Picker("Anisotropic filtering", selection: $model.anisotropicFiltering) {
                 ForEach(SettingsModel.anisotropicOptions, id: \.self) { value in
                     Text(SettingsModel.anisotropicLabel(value)).tag(value)
@@ -347,13 +399,29 @@ struct SettingsView: View {
         } header: {
             Text("Graphics")
         } footer: {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Saved automatically. Close and reopen Tsubomi to apply resolution, High accuracy and double-buffered guest memory. Per-game overrides apply on the next launch.")
+            settingsHelp {
+                Text("Resolution changes require restarting the app. Per-game overrides apply on the next launch.")
+                Text("Lower resolution reduces GPU work, but games can still be limited by CPU emulation or shader compilation. The lower memory preset selects 0.5× resolution (480×272 for a native 960×544 frame).")
+            }
+        }
+    }
+
+    private var compatibilitySection: some View {
+        Section {
+            if !model.isPerGame {
+                Toggle("Conservative draw culling", isOn: $conservativeCulling)
+            }
+            Toggle("High accuracy", isOn: $model.highAccuracy)
+            Toggle("Surface sync", isOn: $model.surfaceSync)
+            Toggle("Double-buffered guest memory", isOn: $model.doubleBuffer)
+
+        } header: { Text("Compatibility") } footer: {
+            settingsHelp {
+                Text("Restart the app after changing these options. Compare one change at a time in the same game scene.")
                 Text("Conservative draw culling skips empty draws or fully clipped draws only when the vertex program has no detected buffer access and no visibility query is active. Render-pass clears are preserved. It does not guess which game objects are hidden, remove visible HUD elements or apply distance culling. Restart the app to apply; compare the same scene with it off and on.")
                 Text("High accuracy changes framebuffer feedback and surface sampling. It can improve some games and reduce performance. If it causes a black screen, turn it off for that game and report the title and log.")
                 Text("Surface sync copies rendered surfaces back to guest RAM for games that read them on the CPU. It can improve effects and lighting but adds GPU readback work.")
                 Text("Double-buffered guest memory copies CPU buffers for GPU use; it is not display double buffering. Leave it off if models are distorted.")
-                Text("Lower resolution reduces GPU work, but games can still be limited by CPU emulation or shader compilation. The lower memory preset selects 0.5× resolution (480×272 for a native 960×544 frame).")
             }
         }
     }
@@ -387,12 +455,6 @@ struct SettingsView: View {
 
     private var performanceOverlaySection: some View {
         Section {
-            Toggle("Apple Metal Performance HUD", isOn: $metalHUDEnabled)
-            Picker("Renderer diagnostics", selection: $renderDiagnostics) {
-                Text("Off").tag(0)
-                Text("Summary every 5 seconds").tag(1)
-                Text("Summary + shader compilation samples").tag(2)
-            }
             Toggle("Compact readout", isOn: $compactPerformanceHUD)
             DefaultsToggle("Show FPS", key: .perfFPS, onEnable: enablePerfOverlay)
             DefaultsToggle("Show frametime", key: .perfFrametime, onEnable: enablePerfOverlay)
@@ -400,15 +462,35 @@ struct SettingsView: View {
             DefaultsToggle("Show RAM usage", key: .perfRAM, onEnable: enablePerfOverlay)
             DefaultsToggle("Show battery %", key: .perfBattery, onEnable: enablePerfOverlay)
             DefaultsToggle("Show live log", key: .perfLog, onEnable: enablePerfOverlay)
+            Slider(value: $logOpacity, in: 0.1...0.6, step: 0.05) {
+                Text("Live log background opacity")
+            }
+            LabeledContent("Log background", value: "\(Int((logOpacity * 100).rounded()))%")
         } header: {
             Text("Performance overlay")
         } footer: {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Metal HUD uses Apple's MetalHUDForceEnabled preference. Close and reopen Tsubomi to request it. Availability depends on iOS and app provisioning; this switch cannot guarantee that iOS will display it. It is separate from Tsubomi's overlay.")
+            settingsHelp {
+                Text("The Tsubomi overlay appears in-game once any metric is enabled. FPS counts guest frame submissions; frametime is calculated from the one-second FPS average, not measured GPU execution time. Live log shows a compact tail. Drag its header, collapse it or use × to hide it; export the log for full details.")
+            }
+        }
+    }
+
+    private var diagnosticsSection: some View {
+        Section {
+            Toggle("Apple Metal Performance HUD", isOn: $metalHUDEnabled)
+            Picker("Renderer diagnostics", selection: $renderDiagnostics) {
+                Text("Off").tag(0)
+                Text("Summary every 5 seconds").tag(1)
+                Text("Summary + shader compilation samples").tag(2)
+            }
+            LabeledContent("Metal HUD status", value: metalHUDEnabled ? "Requested after restart" : "Off")
+            Button("Export log") { Bridge.shareLogFile() }
+        } header: { Text("Diagnostics") } footer: {
+            settingsHelp {
+                Text("Metal HUD is requested through Apple's preference and startup environment variable. Close and reopen the app. Some iOS/provisioning combinations do not display it; the app cannot read its visibility. Tsubomi's FPS/RAM overlay remains available.")
                 Text("Renderer diagnostics also require an app restart. Summaries count draw calls, flat-viewport draws, clipping, framebuffer feedback, render passes, surface copies, uploads, swapchain rebuilds and pipeline compilation. Flat draws can include 2D UI but are not an exact UI-object count.")
                 Text("Shader compilation samples add at most four newly compiled shader-pair records per reporting interval; cached pipelines may produce no samples. No per-draw logging, uniform dumps, GPU waits or extra polling thread are added. Diagnostics and Metal HUD still have some overhead; keep them off for baseline FPS measurements.")
                 Text("To report a 2D UI slowdown: enable Summary, reopen the app, play the same scene with the UI hidden and visible for at least 10 seconds each, then export tsubomi.log. Use sampled shaders for a short reproduction if needed.")
-                Text("The Tsubomi overlay appears in-game once any metric is enabled. FPS counts guest frame submissions; frametime is calculated from the one-second FPS average, not measured GPU execution time. The live log keeps the last ~250 lines for bug reports.")
             }
         }
     }

@@ -39,15 +39,15 @@ struct OnboardingView: View {
         Page(
             symbol: "sparkles",
             title: "Welcome to Tsubomi",
-            body: "",
+            body: "Set up firmware, import your games and start playing.",
             requirement: nil
         ),
         Page(
             symbol: "checkmark.shield",
-            title: "Bring Your Own Games",
+            title: "Your Game Library",
             body: """
-                Piracy is not supported. You must supply your own legally obtained game dumps \
-                and license files; Tsubomi does not include games, firmware, keys, or licenses.
+                Import your own game backups and license files. \
+                Games, firmware and licenses are not included.
                 """,
             requirement: nil
         ),
@@ -84,28 +84,17 @@ struct OnboardingView: View {
     }
 
     var body: some View {
-        ZStack {
-            // Centre the welcome title on the screen, independently of the
-            // height of the bottom actions. Other pages can scroll as needed.
-            if pageIndex == 0 {
+        VStack(spacing: 20) {
+            ScrollView {
                 pageContent
-                    .padding(.horizontal, isCompact ? 60 : 32)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(maxWidth: 520)
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, isCompact ? 16 : 48)
             }
-            VStack(spacing: 0) {
-                if pageIndex == 0 {
-                    Spacer(minLength: 0)
-                } else {
-                    ScrollView {
-                        pageContent
-                            .frame(maxWidth: .infinity)
-                    }
-                }
-                actions
-            }
-            .padding(.horizontal, isCompact ? 60 : 32)
-            .padding(.bottom, isCompact ? 16 : 32)
+            actions
         }
+        .padding(.horizontal, isCompact ? 40 : 24)
+        .padding(.bottom, isCompact ? 16 : 24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(.systemBackground).ignoresSafeArea())
         // Setup can be revisited with Back but cannot be dismissed until ready.
@@ -114,9 +103,9 @@ struct OnboardingView: View {
 
     private var pageContent: some View {
         VStack(spacing: isCompact ? 10 : 16) {
-            if pageIndex > 0 {
+            if !page.symbol.isEmpty {
                 Image(systemName: page.symbol)
-                    .font(.system(size: isCompact ? 44 : 60))
+                    .font(.system(size: isCompact ? 36 : 48))
                     .foregroundStyle(.tint)
                     // Symbols are how the user perceives the page changing;
                     // a bounce on arrival reads as the step advancing.
@@ -125,7 +114,7 @@ struct OnboardingView: View {
             }
 
             Text(page.title)
-                .font(isCompact ? .title2 : .title)
+                .font(.title2)
                 .fontWeight(.bold)
                 .multilineTextAlignment(.center)
                 .lineLimit(nil)
@@ -133,7 +122,7 @@ struct OnboardingView: View {
 
             if !page.body.isEmpty {
                 Text(page.body)
-                    .font(isCompact ? .footnote : .body)
+                    .font(.callout)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     // Preserve the full instructions within the scrollable area.

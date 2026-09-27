@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -219,8 +220,8 @@ void vita3k_ios_show_boot_error(const std::string &message);
 // Most recent formatted log lines (oldest first, newest last), fed by a
 // spdlog callback sink registered at startup. Backs an optional in-game live
 // log overlay: cheap to poll (a small in-memory ring buffer, no file IO), so
-// the frontend can call it every frame or two while the overlay is visible.
-std::vector<std::string> vita3k_ios_recent_log_lines();
+// the frontend samples only a bounded tail once per second while visible.
+std::vector<std::string> vita3k_ios_recent_log_lines(std::size_t max_lines = 8);
 
 // Progress snapshots are polled by the library loop, never per-file UI callbacks.
 void vita3k_ios_report_install_progress(int percent, bool firmware);

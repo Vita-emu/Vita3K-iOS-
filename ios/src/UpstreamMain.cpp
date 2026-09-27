@@ -117,9 +117,10 @@ void push_recent_log_line(std::string line) {
 }
 } // namespace
 
-std::vector<std::string> vita3k_ios_recent_log_lines() {
+std::vector<std::string> vita3k_ios_recent_log_lines(std::size_t max_lines) {
     const std::lock_guard<std::mutex> lock(g_recent_log_mutex);
-    return std::vector<std::string>(g_recent_log_lines.begin(), g_recent_log_lines.end());
+    const size_t shown = std::min(max_lines, g_recent_log_lines.size());
+    return std::vector<std::string>(g_recent_log_lines.end() - shown, g_recent_log_lines.end());
 }
 
 namespace {

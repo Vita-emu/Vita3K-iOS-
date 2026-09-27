@@ -128,6 +128,8 @@ NS_SWIFT_NAME(Bridge)
 @interface TsubomiBridge : NSObject
 /// Active process backend; saved settings take effect after restart.
 @property(class, nonatomic, readonly) BOOL cpuRequiresJIT;
+/// Snapshot on demand; no timer or GPU benchmark is started.
+@property(class, nonatomic, readonly) NSDictionary<NSString *, NSString *> *deviceInformation;
 
 /// Current global settings, as the core last reported them.
 @property(class, nonatomic, readonly) TsubomiSettings *currentSettings;

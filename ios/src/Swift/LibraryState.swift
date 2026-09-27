@@ -17,7 +17,7 @@ final class LibraryState: ObservableObject {
     /// and are dimmed in the list.
     @Published private(set) var firmwareReady = false
     /// The process has JIT capability. Games cannot boot without it.
-    @Published private(set) var jitAvailable = true
+    @Published private(set) var jitAvailable = false
 
     /// Bumped whenever cached cover art may be stale.
     ///
