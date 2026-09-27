@@ -323,12 +323,12 @@ EXPORT(int, sceAvPlayerClose, SceUID player_handle) {
         for (auto &buffer : player_info->video_buffer) {
             if (buffer)
                 free(emuenv.mem, buffer);
-            buffer = {};
+            buffer.reset();
         }
         for (auto &buffer : player_info->audio_buffer) {
             if (buffer)
                 free(emuenv.mem, buffer);
-            buffer = {};
+            buffer.reset();
         }
     }
     const auto thread = emuenv.kernel.get_thread(thread_id);

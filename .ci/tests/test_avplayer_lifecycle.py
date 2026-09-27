@@ -28,6 +28,11 @@ class AvPlayerLifecycleTests(unittest.TestCase):
         module = (root / "vita3k/modules/SceAvPlayer/SceAvPlayer.cpp").read_text()
         codec = (root / "vita3k/codec/src/player.cpp").read_text()
         fixture = (Path(__file__).parent / "avplayer_lifecycle.cpp").read_text()
+        pointer = (root / "vita3k/mem/include/mem/ptr.h").read_text()
+        start = pointer.index("template <class T>\nclass Ptr {")
+        end = pointer.index("static_assert(sizeof(Ptr<const void>)", start)
+        end = pointer.index(";", end) + 1
+        fixture = fixture.replace("// INSERT_PTR", pointer[start:end])
         declarations = module[module.index("struct PlayerInfoState;"):module.index("static inline uint64_t current_time()")]
         fixture = fixture.replace("// INSERT_DECLARATIONS", declarations)
         fixture = fixture.replace("// INSERT_FRAMERATE", function(codec, "uint64_t PlayerState::get_framerate_microseconds()"))

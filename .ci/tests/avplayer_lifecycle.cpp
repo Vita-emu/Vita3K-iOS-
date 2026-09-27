@@ -10,33 +10,40 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 using SceUID = int;
+using Address = uint32_t;
+constexpr uint32_t KiB(uint32_t size) { return size * 1024; }
 struct MemState {
-    std::map<uintptr_t, std::unique_ptr<uint8_t[]>> allocations;
+    std::map<Address, uint32_t> allocations;
+    std::unique_ptr<uint8_t[]> memory = std::make_unique<uint8_t[]>(KiB(256));
+    bool use_page_table = false;
+    std::vector<uint8_t *> page_table;
+    Address next = 4;
     int remaining = -1;
 };
 template <typename T>
-struct Ptr {
-    uintptr_t address = 0;
-    Ptr(uintptr_t value = 0)
-        : address(value) {}
-    explicit operator bool() const { return address != 0; }
-    T *get(MemState &) const { return reinterpret_cast<T *>(address); }
-};
-static Ptr<uint8_t> alloc(MemState &mem, uint32_t size, const char *) {
+bool atomic_compare_and_swap(volatile T *, T, T);
+static bool is_valid_addr(const MemState &mem, Address address) {
+    return mem.allocations.count(address) != 0;
+}
+// INSERT_PTR
+static Address alloc(MemState &mem, uint32_t size, const char *) {
     if (mem.remaining == 0)
-        return {};
+        return 0;
     if (mem.remaining > 0)
         --mem.remaining;
-    auto data = std::make_unique<uint8_t[]>(size);
-    const auto address = reinterpret_cast<uintptr_t>(data.get());
-    mem.allocations.emplace(address, std::move(data));
+    const Address address = mem.next;
+    mem.next += size;
+    assert(mem.next <= KiB(256));
+    mem.allocations.emplace(address, size);
     return address;
 }
 static void free(MemState &mem, Ptr<uint8_t> ptr) {
-    assert(mem.allocations.erase(ptr.address) == 1);
+    assert(ptr.valid(mem));
+    assert(mem.allocations.erase(ptr.address()) == 1);
 }
 namespace fmt {
 template <typename... Args>
@@ -163,6 +170,10 @@ int main() {
     };
     assert(sceAvPlayerClose(env, 0, 1) == 0);
     assert(events == 2 && env.mem.allocations.empty());
+    for (auto buffer : player->video_buffer)
+        assert(!buffer);
+    for (auto buffer : player->audio_buffer)
+        assert(!buffer);
     callback = {};
     assert(sceAvPlayerStop(env, 0, 99) != 0);
     assert(!sceAvPlayerGetAudioData(env, 0, 99, &frame));
@@ -174,11 +185,11 @@ int main() {
     assert(env.mem.allocations.empty());
     player->player.eof = false;
     assert(sceAvPlayerGetVideoData(env, 0, 1, &frame));
-    const auto old_buffer = player->video_buffer[0].address;
+    const auto old_buffer = player->video_buffer[0].address();
     env.mem.remaining = 2;
     player->player.on_decode = [&] { player->player.dimensions = { 64, 64 }; };
     assert(!sceAvPlayerGetVideoData(env, 0, 1, &frame));
-    assert(env.mem.allocations.size() == 4 && player->video_buffer[0].address == old_buffer);
+    assert(env.mem.allocations.size() == 4 && player->video_buffer[0].address() == old_buffer);
     env.mem.remaining = -1;
     assert(sceAvPlayerGetVideoData(env, 0, 1, &frame));
     assert(frame.stream_details.video.width == 64 && frame.data.get(env.mem)[6143] == 42);
