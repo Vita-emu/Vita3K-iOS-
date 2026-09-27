@@ -872,6 +872,9 @@ int TextureCache::cache_and_bind_sampler(const SceGxmTexture &gxm_texture, bool 
     // the depth part only matters if we can't apply linear filtering to it
     is_depth &= !support_depth_linear_filtering;
     compact_repr |= (static_cast<uint32_t>(is_depth) << 23);
+    // Filtering is a host setting, not part of the guest texture descriptor.
+    // Include it so changing the setting cannot reuse a sampler with old anisotropy.
+    compact_repr |= static_cast<uint32_t>(std::clamp(anisotropic_filtering, 1, 16)) << 24;
 
     auto it = sampler_lookup.find(compact_repr);
     if (it != sampler_lookup.end()) {

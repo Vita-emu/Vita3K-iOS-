@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <deque>
 #include <mutex>
 #include <utility>
 
@@ -321,11 +322,16 @@ void restore_modal_depth(UIView *view, BOOL animated,
 namespace {
 
 std::mutex g_action_mutex;
-std::optional<Vita3KIOSFrontendAction> g_pending_action;
+std::deque<Vita3KIOSFrontendAction> g_pending_actions;
 
 void queue_action(Vita3KIOSFrontendAction action) {
     const std::lock_guard lock(g_action_mutex);
-    g_pending_action = std::move(action);
+    // Coalesce only consecutive saves; preserve their order relative to Launch.
+    if (action.kind == Vita3KIOSFrontendActionKind::ApplySettings && !g_pending_actions.empty()
+        && g_pending_actions.back().kind == Vita3KIOSFrontendActionKind::ApplySettings)
+        g_pending_actions.back() = std::move(action);
+    else
+        g_pending_actions.push_back(std::move(action));
 }
 
 // Last snapshot the core reported, kept so the SwiftUI bridge can read it
@@ -1576,8 +1582,10 @@ void vita3k_ios_hide_library() {
 
 std::optional<Vita3KIOSFrontendAction> vita3k_ios_take_frontend_action() {
     const std::lock_guard lock(g_action_mutex);
-    auto action = std::move(g_pending_action);
-    g_pending_action.reset();
+    if (g_pending_actions.empty())
+        return std::nullopt;
+    auto action = std::move(g_pending_actions.front());
+    g_pending_actions.pop_front();
     return action;
 }
 

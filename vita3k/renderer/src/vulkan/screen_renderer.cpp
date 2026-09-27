@@ -232,28 +232,16 @@ void ScreenRenderer::select_present_mode() {
         return std::find(present_modes.begin(), present_modes.end(), mode) != present_modes.end();
     };
 
-    // Immediate is the last resort in both branches: it is the one mode that
-    // needs no queueing support from the driver.
-    present_mode = vk::PresentModeKHR::eImmediate;
-    if (v_sync) {
-        // With v-sync on, presentation is paced by the display. On a battery
-        // powered device that pacing is the point: fifo blocks acquire until an
-        // image is actually free, so the render thread cannot run ahead and
-        // produce frames the compositor will never show. fifo is the only mode
-        // Vulkan guarantees, so the fallbacks here are theoretical.
-        if (supports(vk::PresentModeKHR::eFifo)) {
-            present_mode = vk::PresentModeKHR::eFifo;
-        } else if (supports(vk::PresentModeKHR::eFifoRelaxed)) {
-            present_mode = vk::PresentModeKHR::eFifoRelaxed;
-        }
-    } else {
-        // v-sync off means lowest latency at the cost of power, and tearing if
-        // it comes to immediate: mailbox > fifo_relaxed > immediate.
-        if (supports(vk::PresentModeKHR::eMailbox)) {
+    // FIFO is guaranteed by Vulkan. Never request Immediate unless the
+    // driver advertises it (MoltenVK availability depends on the device).
+    present_mode = vk::PresentModeKHR::eFifo;
+    if (!v_sync) {
+        if (supports(vk::PresentModeKHR::eMailbox))
             present_mode = vk::PresentModeKHR::eMailbox;
-        } else if (supports(vk::PresentModeKHR::eFifoRelaxed)) {
+        else if (supports(vk::PresentModeKHR::eImmediate))
+            present_mode = vk::PresentModeKHR::eImmediate;
+        else if (supports(vk::PresentModeKHR::eFifoRelaxed))
             present_mode = vk::PresentModeKHR::eFifoRelaxed;
-        }
     }
 
     LOG_INFO("Present mode: {} (v-sync {})", vk::to_string(present_mode), v_sync ? "on" : "off");

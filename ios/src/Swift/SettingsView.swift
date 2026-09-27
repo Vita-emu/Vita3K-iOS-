@@ -219,9 +219,12 @@ struct SettingsView: View {
         } header: {
             Text("CPU")
         } footer: {
-            Text("""
-                Backend and JIT cache changes require closing and reopening Tsubomi.                 JIT is the default for games and requires JIT permission.                 The experimental IR Interpreter runs supported ARM/Thumb integer instructions without JIT permission or an executable code cache.                 It is slower, does not support VFP/NEON or exclusive instructions yet, and stops with an error in the log on unsupported instructions. Use JIT for general games.                 CPU optimizations apply to JIT on the next game launch. Automatic JIT cache uses 8 MiB per thread on a 3 GB device; this is not total thread RAM.
-                """)
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Backend and JIT cache changes take effect after closing and reopening Tsubomi. Active backend shows the backend this process is using.")
+                Text("Dynarmic JIT requires JIT permission. CPU optimizations apply on the next game launch.")
+                Text("IR Interpreter is experimental and slower. It supports a subset of ARM/Thumb integer instructions; VFP, NEON and exclusive instructions are not supported. Unsupported instructions stop execution and are recorded in the log.")
+                Text("The JIT cache size is per guest thread, not a limit on total CPU memory. Automatic selects the size for this device.")
+            }
         }
     }
 
@@ -239,29 +242,20 @@ struct SettingsView: View {
                 }
             }
             Toggle("Reclaim unused GPU buffer memory", isOn: $trimStagingBuffers)
-            Button("Use iPhone 8 Plus memory settings") {
-                guestMemoryMiB = 768
-                jitCacheMiB = 8
-                shaderWorkers = 1
-                textureCacheEntries = 128
-                trimStagingBuffers = true
-                precompileShaders = false
-                model.useLowerMemoryPreset()
-            }
             Button("Reset memory settings") {
                 guestMemoryMiB = 768
-                jitCacheMiB = 0
-                shaderWorkers = 0
                 textureCacheEntries = 0
                 trimStagingBuffers = true
-                precompileShaders = false
             }
         } header: {
             Text("Allocation & Caches")
         } footer: {
-            Text("""
-                Saved immediately; close and reopen Tsubomi to apply.                 The default 768 MiB limit covers allocated guest pages. Memory is committed only when requested and the budget is returned when freed.                 It excludes JIT, textures, the graphics driver and the interface, so total app RAM may exceed 768 MiB. Games exceeding the limit receive allocation failures.                 The required 4 GiB virtual address space is retained; it is not 4 GiB of physical RAM.                 Texture limits count entries, not bytes. Upload buffers shrink after the GPU has finished using them.
-                """)
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Saved immediately. Close and reopen Tsubomi to apply these memory settings.")
+                Text("Guest RAM limits memory allocated by the emulated game. The default is 768 MiB; games that need more may fail to allocate memory. JIT code, GPU resources and the interface use additional RAM.")
+                Text("Texture cache limits count textures, not MiB. Smaller caches use fewer entries but may cause more uploads and stutter.")
+                Text("GPU buffer reclamation releases oversized upload buffers after the GPU finishes using them. Reset restores only the settings on this page.")
+            }
         }
     }
 
@@ -281,14 +275,22 @@ struct SettingsView: View {
         } header: {
             Text("Shaders")
         } footer: {
-            Text("Disk cache and async compilation apply on the next game launch. Worker count and precompilation require an app restart. Workers compile shaders on the CPU; the GPU executes them. Fewer workers reduce concurrent compilation memory. Precompilation requires disk caching; leaving it off can cause first-use stutter.")
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Shader disk cache reuses compiled shaders between launches. Async compilation can reduce pauses, but objects may be missing until their pipeline is ready. Turn it off when checking missing graphics.")
+                Text("Compiler thread count and precompilation require an app restart. More threads can increase CPU and memory use; precompilation needs disk caching and can lengthen startup.")
+                Text("Shader settings selected in the library apply on the next game launch.")
+            }
         }
     }
 
     private var videoSection: some View {
-        Section("Video") {
+        Section {
             Toggle("V-Sync", isOn: $model.vSync)
-                .accessibilityHint("Synchronizes presentation to the display.")
+                .accessibilityHint("Synchronizes presentation to the display when supported.")
+        } header: {
+            Text("Video")
+        } footer: {
+            Text("V-Sync uses a display-synchronized presentation mode. When off, the renderer chooses an available low-latency mode; some devices still require synchronized presentation. Games keep their original timing. This does not turn a 30 FPS game into a 60 FPS game or guarantee 60 FPS.")
         }
     }
 
@@ -315,7 +317,7 @@ struct SettingsView: View {
 
             Toggle("High accuracy", isOn: $model.highAccuracy)
             Toggle("Surface sync", isOn: $model.surfaceSync)
-            Toggle("Double buffer", isOn: $model.doubleBuffer)
+            Toggle("Double-buffered guest memory", isOn: $model.doubleBuffer)
 
             Picker("Anisotropic filtering", selection: $model.anisotropicFiltering) {
                 ForEach(SettingsModel.anisotropicOptions, id: \.self) { value in
@@ -325,16 +327,13 @@ struct SettingsView: View {
         } header: {
             Text("Graphics")
         } footer: {
-            // Replaces the library's "?" button: the explanation belongs next
-            // to the switches it is about, not behind a glyph on the home
-            // screen. Kept to the three symptoms people actually report.
-            Text("""
-                Changes save automatically and apply on the next game launch. \
-                The lower memory preset renders at 480×272; 30 FPS means 33.33 ms per frame, but varies by game. \
-                Graphics look wrong? Try High accuracy. \
-                Lighting white or missing? Also turn on Surface sync. \
-                Character models shattered? Make sure Double buffer is off.
-                """)
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Saved automatically. Close and reopen Tsubomi to apply resolution, High accuracy and double-buffered guest memory. Per-game overrides apply on the next launch.")
+                Text("High accuracy changes framebuffer feedback and surface sampling. It can improve some games and reduce performance. If it causes a black screen, turn it off for that game and report the title and log.")
+                Text("Surface sync copies rendered surfaces back to guest RAM for games that read them on the CPU. It can improve effects and lighting but adds GPU readback work.")
+                Text("Double-buffered guest memory copies CPU buffers for GPU use; it is not display double buffering. Leave it off if models are distorted.")
+                Text("Lower resolution reduces GPU work, but games can still be limited by CPU emulation or shader compilation. The lower memory preset selects 0.5× resolution (480×272 for a native 960×544 frame).")
+            }
         }
     }
 
@@ -377,7 +376,7 @@ struct SettingsView: View {
         } header: {
             Text("Performance overlay")
         } footer: {
-            Text("The overlay appears in-game once any metric is enabled. The live log keeps the last ~250 lines, which is useful when reporting a bug.")
+            Text("The overlay appears in-game once any metric is enabled. FPS counts guest frame submissions; frametime is calculated from the one-second FPS average, not measured GPU execution time. The live log keeps the last ~250 lines for bug reports.")
         }
     }
 

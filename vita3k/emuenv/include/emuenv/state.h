@@ -20,6 +20,7 @@
 #include <emuenv/window.h>
 #include <util/fs.h>
 
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -136,7 +137,7 @@ public:
     std::string self_path{};
     Config &cfg;
     SceUID main_thread_id{};
-    size_t frame_count = 0;
+    std::atomic<size_t> frame_count{ 0 };
     uint32_t fps = 0;
     uint32_t avg_fps = 0;
     uint32_t min_fps = 0;

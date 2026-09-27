@@ -1,4 +1,3 @@
-#include <util/ios_runtime_tuning.h>
 #include <atomic>
 #include <cassert>
 #include <cstring>
@@ -15,6 +14,7 @@
 #include <stdexcept>
 #include <string>
 #include <tuple>
+#include <util/ios_runtime_tuning.h>
 #include <vector>
 namespace fs {
 using namespace std::filesystem;
@@ -36,7 +36,7 @@ constexpr uint32_t SCE_MAGIC = 0x454353;
 namespace fmt {
 template <class A, class B>
 std::string format(const char *, A, B) { return "segment.pkg"; }
-}
+} // namespace fmt
 // INSERT_PACKAGE_NAME
 struct KeyStore {};
 enum class SelfType { NONE };
@@ -212,6 +212,33 @@ int main(int argc, char **argv) {
     settings.shader_cache = false;
     apply_game_session_settings(env, settings);
     assert(!env.cfg.current_config.shader_cache);
+    for (bool enabled : { false, true }) {
+        settings.v_sync = enabled;
+        settings.shader_cache = enabled;
+        settings.cpu_opt = enabled;
+        settings.ngs_enable = enabled;
+        settings.async_pipeline_compilation = enabled;
+        settings.high_accuracy = enabled;
+        settings.surface_sync = enabled;
+        settings.double_buffer = enabled;
+        settings.anisotropic_filtering = enabled ? 16 : 1;
+        settings.resolution_multiplier = enabled ? 2.0f : 0.5f;
+        for (bool per_game : { false, true }) {
+            if (per_game)
+                apply_game_session_settings(env, settings);
+            else
+                apply_native_settings(env, settings);
+            const auto &current = env.cfg.current_config;
+            assert(current.v_sync == enabled && current.shader_cache == enabled);
+            assert(current.cpu_opt == enabled && current.ngs_enable == enabled);
+            assert(current.async_pipeline_compilation == enabled && current.high_accuracy == enabled);
+            assert(current.disable_surface_sync == !enabled);
+            assert(current.memory_mapping == (enabled ? "double-buffer" : "disabled"));
+            assert(current.anisotropic_filtering == settings.anisotropic_filtering);
+            assert(current.resolution_multiplier == settings.resolution_multiplier);
+            assert(!current.fps_hack && env.display.fps_limit.load() == 60);
+        }
+    }
     Config cfg;
     cfg.hidden_setting = "saved";
     const auto config_path = root / "config.yml";
@@ -348,10 +375,12 @@ int main(int argc, char **argv) {
         assert(EVP_EncryptFinal_ex(cipher.get(), reinterpret_cast<unsigned char *>(bytes.data()) + count, &tail) == 1);
         bytes.resize(count + tail);
         const auto declared = bytes.size();
-        if (truncate_input) bytes.pop_back();
+        if (truncate_input)
+            bytes.pop_back();
         std::istringstream source(bytes);
         std::ostringstream dest;
-        if (fail_output) dest.setstate(std::ios::badbit);
+        if (fail_output)
+            dest.setstate(std::ios::badbit);
         assert(EVP_DecryptInit_ex(cipher.get(), EVP_aes_128_ctr(), nullptr, reinterpret_cast<const unsigned char *>(key.data()), reinterpret_cast<const unsigned char *>(key.data())) == 1);
         packages::decrypt_stream_exact(source, dest, cipher.get(), declared, compressed);
         return dest.str();
@@ -360,14 +389,17 @@ int main(int argc, char **argv) {
         mz_ulong size = mz_compressBound(plain.size());
         std::string bytes(size, '\0');
         assert(mz_compress(reinterpret_cast<unsigned char *>(bytes.data()), &size,
-            reinterpret_cast<const unsigned char *>(plain.data()), plain.size()) == MZ_OK);
+                   reinterpret_cast<const unsigned char *>(plain.data()), plain.size())
+            == MZ_OK);
         bytes.resize(size);
         return bytes;
     };
     std::string random_bytes(400007, '\0');
     uint32_t seed = 31337;
     for (auto &byte : random_bytes) {
-        seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5;
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
         byte = static_cast<char>(seed);
     }
     auto compressed = compress_fixture(random_bytes);

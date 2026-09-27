@@ -67,7 +67,7 @@ static const char *thread_status_str(ThreadStatus status) {
 static void dump_display_state(EmuEnvState &emuenv) {
     DisplayState &display = emuenv.display;
     LOG_INFO("Display: vblank_count={} last_setframe_vblank_count={} guest_frame_count={} predicting={} current_sync_object=0x{:X}",
-        display.vblank_count.load(), display.last_setframe_vblank_count.load(), emuenv.frame_count,
+        display.vblank_count.load(), display.last_setframe_vblank_count.load(), emuenv.frame_count.load(std::memory_order_relaxed),
         display.predicting.load(), display.current_sync_object.load());
 
     {

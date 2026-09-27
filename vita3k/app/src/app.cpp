@@ -314,7 +314,7 @@ bool update_runtime_metrics(EmuEnvState &emuenv, LaunchRuntimeMetrics &metrics) 
     if (ms < 1000)
         return false;
 
-    const uint32_t frame_count = static_cast<uint32_t>(emuenv.frame_count);
+    const uint32_t frame_count = static_cast<uint32_t>(emuenv.frame_count.exchange(0, std::memory_order_relaxed));
     if (frame_count == 0) {
         metrics.last_fps_time = now;
         return false;
@@ -323,7 +323,6 @@ bool update_runtime_metrics(EmuEnvState &emuenv, LaunchRuntimeMetrics &metrics) 
     emuenv.fps = (frame_count * 1000 + ms / 2) / ms;
     emuenv.ms_per_frame = (ms + frame_count / 2) / frame_count;
     metrics.last_fps_time = now;
-    emuenv.frame_count = 0;
 
     emuenv.fps_values[emuenv.current_fps_offset] = static_cast<float>(emuenv.fps);
     emuenv.current_fps_offset = (emuenv.current_fps_offset + 1) % perf_frames_size;

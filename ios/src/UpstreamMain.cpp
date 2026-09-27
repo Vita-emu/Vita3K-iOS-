@@ -2471,6 +2471,7 @@ std::optional<AppLaunchRequest> choose_boot_title(EmuEnvState &emuenv) {
     vita3k_ios_show_library(games, native_settings(emuenv));
 
     bool leave_library = false;
+    std::optional<Vita3KIOSSettings> deferred_settings;
     std::optional<AppLaunchRequest> launch_request;
     for (;;) {
         vita3k_ios_autorelease([&] {
@@ -2510,6 +2511,11 @@ std::optional<AppLaunchRequest> choose_boot_title(EmuEnvState &emuenv) {
                 const std::string share_path = g_import_job->share_path;
                 const auto installed_applications = g_import_job->installed_applications;
                 g_import_job.reset();
+                if (deferred_settings) {
+                    apply_native_settings(emuenv, *deferred_settings);
+                    deferred_settings.reset();
+                    vita3k_ios_update_library(games, native_settings(emuenv));
+                }
                 if (rescan_apps && !was_firmware && !apps_rescanned && !app::scan_apps(emuenv))
                     LOG_ERROR("Failed to rescan apps list after import.");
                 if (rescan_apps || (success && refresh_library)) {
@@ -2527,10 +2533,16 @@ std::optional<AppLaunchRequest> choose_boot_title(EmuEnvState &emuenv) {
             }
 
             if (auto action = vita3k_ios_take_frontend_action()) {
+                if (g_import_job && action->kind == Vita3KIOSFrontendActionKind::ApplySettings) {
+                    // The worker owns mutable emulator state until it finishes.
+                    // Preserve the latest save rather than discarding an autosave.
+                    deferred_settings = action->settings;
+                    vita3k_ios_report_import_result("Settings will apply when the import finishes", true);
+                    return;
+                }
                 if (g_import_job && !g_import_job->done.load()
                     && (action->kind == Vita3KIOSFrontendActionKind::Launch
                         || action->kind == Vita3KIOSFrontendActionKind::Refresh
-                        || action->kind == Vita3KIOSFrontendActionKind::ApplySettings
                         || action->kind == Vita3KIOSFrontendActionKind::DeleteGame
                         || action->kind == Vita3KIOSFrontendActionKind::Quit)) {
                     vita3k_ios_report_import_result("Wait for the current import to finish", false);
@@ -3182,7 +3194,7 @@ int main(int argc, char *argv[]) {
     });
 
     Uint64 perf_last_ms = SDL_GetTicks();
-    std::size_t perf_last_frame_count = emuenv->frame_count;
+    std::size_t perf_last_frame_count = emuenv->frame_count.load(std::memory_order_relaxed);
     Uint64 playtime_checkpoint_ms = perf_last_ms;
 
     IOSInputSession text_input;
@@ -3278,7 +3290,7 @@ int main(int argc, char *argv[]) {
             {
                 const Uint64 now_ms = SDL_GetTicks();
                 if (now_ms - perf_last_ms >= 1000) {
-                    const std::size_t frames = emuenv->frame_count;
+                    const std::size_t frames = emuenv->frame_count.load(std::memory_order_relaxed);
                     const float fps = static_cast<float>(frames - perf_last_frame_count) * 1000.0f
                         / static_cast<float>(now_ms - perf_last_ms);
                     perf_last_frame_count = frames;
