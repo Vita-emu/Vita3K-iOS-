@@ -211,7 +211,7 @@ struct SettingsView: View {
             .onDisappear { model.save() }
     }
 
-    private func settingsHelp<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+    private func settingsHelp<Content: View>(@ViewBuilder content: @escaping () -> Content) -> some View {
         DisclosureGroup("Details") {
             VStack(alignment: .leading, spacing: 8, content: content)
                 .padding(.top, 6)
