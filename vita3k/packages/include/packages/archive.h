@@ -46,9 +46,18 @@ struct ArchiveInstallResult {
     std::string detail;
 };
 
+// Invoked on private staging data before any installed target is replaced.
+// All bundled licenses are staged first, so a patch can share its base license.
+using ArchivePrepare = std::function<bool(const ArchiveApplicationInfo &,
+    const std::filesystem::path &payload_root, std::string &error)>;
+
 ArchiveInspection inspect_archive(std::span<const std::uint8_t> content);
 ArchiveInspection inspect_archive(const std::filesystem::path &path);
 ArchiveInstallResult install_archive_transactionally(const std::filesystem::path &archive_path,
-    const std::filesystem::path &vfs_root, const std::function<void(uint32_t)> &progress = {});
+    const std::filesystem::path &vfs_root, const std::function<void(uint32_t)> &progress = {},
+    const ArchivePrepare &prepare = {});
+ArchiveInstallResult install_directory_transactionally(const std::filesystem::path &directory,
+    const std::filesystem::path &vfs_root, const std::function<void(uint32_t)> &progress = {},
+    const ArchivePrepare &prepare = {});
 
 } // namespace packages
