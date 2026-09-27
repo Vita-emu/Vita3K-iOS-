@@ -37,7 +37,6 @@
 #include <unistd.h>
 #endif
 
-constexpr uint32_t STANDARD_PAGE_SIZE = KiB(4);
 constexpr size_t TOTAL_MEM_SIZE = GiB(4);
 constexpr bool LOG_PROTECT = false;
 #ifdef NDEBUG

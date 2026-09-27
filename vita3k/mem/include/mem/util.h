@@ -17,6 +17,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 
@@ -48,3 +49,6 @@ constexpr size_t MiB(size_t mib) {
 constexpr size_t GiB(size_t gib) {
     return gib * MiB(1024);
 }
+
+// Guest allocator page size; independent of the host VM page size.
+constexpr uint32_t STANDARD_PAGE_SIZE = KiB(4);

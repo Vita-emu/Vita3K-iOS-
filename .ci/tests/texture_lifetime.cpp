@@ -10,10 +10,9 @@
 #include <future>
 #include <map>
 #include <mem/allocator.h>
+#include <mem/util.h>
 #include <mutex>
 
-using Address = uint32_t;
-constexpr uint32_t STANDARD_PAGE_SIZE = 4096;
 constexpr int SCE_GXM_TEXTURE_LINEAR_STRIDED = 1;
 constexpr uint32_t SCE_GXM_TEXTURE_BASE_FORMAT_P4 = 4;
 constexpr uint32_t SCE_GXM_TEXTURE_BASE_FORMAT_P8 = 8;
