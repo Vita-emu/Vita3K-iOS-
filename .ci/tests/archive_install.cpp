@@ -16,6 +16,9 @@
 #include <thread>
 #include <util/log.h>
 #include <vector>
+#ifdef __APPLE__
+#include <pthread/qos.h>
+#endif
 namespace fs {
 using namespace std::filesystem;
 using std::ifstream;
@@ -69,8 +72,11 @@ struct Job {
 };
 using ImportJob = Job;
 static std::shared_ptr<ImportJob> g_import_job;
+#ifndef __APPLE__
+// Apple provides these in pthread/qos.h; only stub QoS on other hosts.
 static constexpr int QOS_CLASS_UTILITY = 0;
 static void pthread_set_qos_class_self_np(int, int) {}
+#endif
 static void vita3k_ios_report_import_result(const std::string &, bool) {}
 namespace app {
 static bool scan_apps(EmuEnvState &) { return true; }
