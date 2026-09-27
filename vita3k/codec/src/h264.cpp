@@ -112,10 +112,14 @@ bool H264DecoderState::send(const uint8_t *data, uint32_t size) {
 
 bool H264DecoderState::receive(uint8_t *data, DecoderSize *size) {
     AVFrame *frame = av_frame_alloc();
+    if (!frame)
+        return false;
 
     int error = avcodec_receive_frame(context, frame);
     if (error < 0) {
-        LOG_WARN("Error receiving H264 frame: {}.", codec_error_name(error));
+        // These are normal decoder states, especially with frame threading.
+        if (error != AVERROR(EAGAIN) && error != AVERROR_EOF)
+            LOG_WARN("Error receiving H264 frame: {}.", codec_error_name(error));
         av_frame_free(&frame);
         return false;
     }
@@ -154,6 +158,19 @@ bool H264DecoderState::receive(uint8_t *data, DecoderSize *size) {
 
     av_frame_free(&frame);
     return true;
+}
+
+bool H264DecoderState::drain(uint8_t *data) {
+    std::lock_guard<std::mutex> lock(codec_mutex);
+    // A null packet enters draining mode. EAGAIN requires receiving queued
+    // output before retrying; EOF here means draining was already requested,
+    // and receive() may still have delayed frames to return.
+    const int error = avcodec_send_packet(context, nullptr);
+    if (error < 0 && error != AVERROR(EAGAIN) && error != AVERROR_EOF) {
+        LOG_WARN("Error draining H264 decoder: {}.", codec_error_name(error));
+        return false;
+    }
+    return receive(data);
 }
 
 void H264DecoderState::configure(void *options) {

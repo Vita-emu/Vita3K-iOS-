@@ -242,3 +242,28 @@ shortcut is enabled.
 Host concurrency tests verify safety and progress. Host admission benchmarks
 measure synchronization overhead only; they cannot establish an iPhone FPS gain
 or that Attack on Titan maintains its target frame rate.
+
+## Attack on Titan: black screen after the opening movie
+
+The later `6bc3613` log renders initially, then stops submitting game frames
+immediately after `LOGO_KT.mp4` ends. Guest frame count stays at 552 and renderer
+draw/pass counters stay at zero. The firmware AvPlayer controller/video workers
+are waiting and its demux thread has exited. Automatic CPU scheduling is active,
+so this session bypasses the explicit CPU admission gate. This is a movie-end
+stall to investigate; a small Metal GPU duration does not show that the GPU
+renderer is disabled.
+
+A concrete decoder defect was found in this path: `sceAvcdecDecodeStop` reported
+one output with the previous frame's metadata without draining FFmpeg or writing
+pixels. With frame threading, several real frames can still be buffered. Stop
+now sends end-of-input to the decoder and returns actual remaining pictures and
+timestamps, bounded by the guest's output-array capacity. Further Stop calls
+continue until there is no output. Only then is the decoder flushed for reuse;
+no frame is fabricated. Expected EAGAIN/EOF receive states are no longer warnings.
+
+A host test using the real FFmpeg 8.1 decoder and the official FATE H264 sample
+`BASQP1_Sony_C.jsv` returned one frame during input and three during draining,
+recovering all four frames. Module tests cover small output arrays, repeated
+Stop calls and restart. These checks establish the drain fix, not a confirmed
+resolution of this particular iPhone stall. Re-test both natural movie completion
+and skipping the movie on device, and capture the log if either still stalls.

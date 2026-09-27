@@ -119,6 +119,8 @@ struct H264DecoderState : public DecoderState {
     void get_res(uint32_t &width, uint32_t &height);
     void get_pts(uint32_t &upper, uint32_t &lower);
     void set_output_format(bool is_yuv_p3);
+    // Return one delayed frame after end of input, without discarding it.
+    bool drain(uint8_t *data);
 
     H264DecoderState(uint32_t width, uint32_t height);
     ~H264DecoderState() override;

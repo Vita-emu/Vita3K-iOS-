@@ -313,6 +313,9 @@ EXPORT(int, sceAvcdecDecodeSetUserDataSei1FieldMemSizeNongameapp) {
 
 EXPORT(int, sceAvcdecDecodeStop, SceAvcdecCtrl *decoder, SceAvcdecArrayPicture *picture) {
     TRACY_FUNC(sceAvcdecDecodeStop, decoder, picture);
+    if (!decoder || !picture)
+        return RET_ERROR(SCE_AVCDEC_ERROR_INVALID_PARAM);
+    picture->numOfOutput = 0;
     const auto state = emuenv.kernel.obj_store.get<VideodecState>();
     const H264DecoderPtr &decoder_info = lock_and_find(decoder->handle, state->decoders, state->mutex);
     if (!decoder_info)
@@ -320,17 +323,31 @@ EXPORT(int, sceAvcdecDecodeStop, SceAvcdecCtrl *decoder, SceAvcdecArrayPicture *
 
     const bool was_stopped = decoder_info->is_stopped;
     if (!was_stopped) {
-        SceAvcdecPicture *pPicture = picture->pPicture.get(emuenv.mem)[0].get(emuenv.mem);
-
-        // we get the values from the last frame, maybe we should slightly increase the pts value?
-        decoder_info->get_res(pPicture->frame.horizontalSize, pPicture->frame.verticalSize);
-        decoder_info->get_pts(pPicture->info.pts.upper, pPicture->info.pts.lower);
-
-        picture->numOfOutput = 1;
-    } else {
-        picture->numOfOutput = 0;
+        if (!picture->numOfElm || !picture->pPicture)
+            return RET_ERROR(SCE_AVCDEC_ERROR_INVALID_PARAM);
+        // Frame-threaded H264 can retain several pictures after the last AU.
+        // Return actual pixels and timestamps, up to the guest's capacity.
+        // Subsequent Stop calls continue draining instead of reporting a fake
+        // duplicate of the last frame and leaving the movie's tail buffered.
+        for (uint32_t i = 0; i < picture->numOfElm; ++i) {
+            SceAvcdecPicture *out = picture->pPicture.get(emuenv.mem)[i].get(emuenv.mem);
+            if (!out || !out->frame.pPicture[0]
+                || !(out->frame.pixelType & (SCE_AVCDEC_PIXEL_YUV420_RASTER | SCE_AVCDEC_PIXEL_YUV420_PACKED_RASTER)))
+                return RET_ERROR(SCE_AVCDEC_ERROR_INVALID_PARAM);
+            decoder_info->set_output_format(out->frame.pixelType & SCE_AVCDEC_PIXEL_YUV420_RASTER);
+            decoder_info->set_res(out->frame.frameWidth, out->frame.frameHeight);
+            if (!decoder_info->drain(out->frame.pPicture[0].cast<uint8_t>().get(emuenv.mem))) {
+                // Ready for a new stream; flush only after delayed output has
+                // been consumed, never on the first Stop call.
+                decoder_info->flush();
+                decoder_info->is_stopped = true;
+                break;
+            }
+            decoder_info->get_res(out->frame.horizontalSize, out->frame.verticalSize);
+            decoder_info->get_pts(out->info.pts.upper, out->info.pts.lower);
+            ++picture->numOfOutput;
+        }
     }
-    decoder_info->is_stopped = true;
 #ifdef VITA3K_PLATFORM_IOS
     LOG_INFO("iOS H264 decoder stop: handle={} was_stopped={} outputs={}",
         decoder->handle, was_stopped, picture->numOfOutput);
