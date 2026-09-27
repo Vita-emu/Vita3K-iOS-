@@ -23,6 +23,7 @@
 #include <emuenv/state.h>
 
 #include <packages/license.h>
+#include <packages/license_file.h>
 
 #include <util/bytes.h>
 #include <util/log.h>
@@ -51,18 +52,19 @@ bool validate_zrif(const std::string &zRIF) {
 }
 
 static bool open_license(const fs::path &license_path, SceNpDrmLicense &license_buf) {
-    memset(&license_buf, 0, sizeof(SceNpDrmLicense));
-    fs::ifstream license(license_path, std::ios::in | std::ios::binary);
-    if (license.is_open()) {
-        license.read((char *)&license_buf, sizeof(SceNpDrmLicense));
-        license.close();
-        return true;
-    }
-
-    return false;
+    std::array<std::uint8_t, 512> bytes{};
+    std::string content_id;
+    license_buf = {};
+    if (!packages::read_license_file(std::filesystem::path(license_path.string()), bytes, content_id))
+        return false;
+    static_assert(sizeof(license_buf) == 512);
+    std::memcpy(&license_buf, bytes.data(), bytes.size());
+    return true;
 }
 
 bool copy_license(EmuEnvState &emuenv, const fs::path &license_path) {
+    emuenv.license_content_id.clear();
+    emuenv.license_title_id.clear();
     SceNpDrmLicense license_buf;
     if (open_license(license_path, license_buf)) {
         emuenv.license_content_id = license_buf.content_id;
@@ -74,12 +76,15 @@ bool copy_license(EmuEnvState &emuenv, const fs::path &license_path) {
         if (license_path != license_dst_path) {
             fs::copy_file(license_path, license_dst_path, fs::copy_options::overwrite_existing);
             if (fs::exists(license_dst_path)) {
+                emuenv.license.rif.erase(emuenv.license_title_id);
                 LOG_INFO("Success copy license file to: {}", license_dst_path);
                 return true;
             } else
                 LOG_ERROR("Fail copy license file to: {}", license_dst_path);
-        } else
-            LOG_ERROR("Source and destination license is same at: {}", license_path);
+        } else {
+            emuenv.license.rif.erase(emuenv.license_title_id);
+            return true;
+        }
     } else
         LOG_ERROR("License file is corrupted at: {}", license_path);
 
@@ -129,6 +134,9 @@ bool create_license(EmuEnvState &emuenv, const std::string &zRIF) {
 
     // Convert zRIF to RIF
     zrif2rif(zRIF, temp_file);
+    temp_file.close();
+    if (!temp_file)
+        return false;
     auto res = copy_license(emuenv, temp_license_path);
     fs::remove(temp_license_path);
     return res;
